@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Terminal Fondamental - {{ indice }}</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+        /* Fond global Glassmorphism - Sérieux */
+        body {
+            font-family: 'Inter', sans-serif; 
+            background-image: url('https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=2070&auto=format&fit=crop'); 
+            background-size: cover;            
+            background-position: center;       
+            background-repeat: no-repeat;      
+            background-attachment: fixed;      
+            background-color: #0f172a; 
+            color: #f1f5f9; 
+            padding: 24px; 
+            margin: 0;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            color: #ffffff; 
+            text-align: left; 
+            margin-top: 0;
+            margin-bottom: 6px;
+            font-size: 1.6em;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        
+        #progressText {
+            text-align: left; 
+            color: #94a3b8; 
+            font-weight: 400; 
+            margin-bottom: 20px; 
+            font-size: 0.9em;
+        }
+
+        /* Barre de filtres */
+        .filter-bar {
+            background: rgba(15, 23, 42, 0.4); 
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 20px; 
+            border-radius: 12px; 
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+            gap: 16px; 
+            align-items: end;
+            margin-bottom: 24px; 
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        
+        .filter-bar label {
+            font-size: 0.75em; 
+            font-weight: 500; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 6px; 
+            color: #cbd5e1; 
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .filter-bar input, .filter-bar select {
+            background: rgba(15, 23, 42, 0.6); 
+            color: #ffffff; 
+            border: 1px solid rgba(255, 255, 255, 0.15); 
+            padding: 8px 10px; 
+            border-radius: 6px; 
+            font-size: 0.9em; 
+            font-family: 'Inter', sans-serif;
+            outline: none;
+            transition: all 0.2s ease;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .filter-bar select option {
+            background: #0f172a;
+            color: #ffffff;
+        }
+        
+        .filter-bar input:focus, .filter-bar select:focus {
+            border-color: #60a5fa;
+            background: rgba(15, 23, 42, 0.9);
+        }
+        
+        .reset-btn {
+            background: rgba(255, 255, 255, 0.05);
+            color: #cbd5e1;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 0.85em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: 'Inter', sans-serif;
+            height: 38px;
+        }
+        .reset-btn:hover {
+            background: rgba(255, 255, 255, 0.1); 
+            color: #ffffff; 
+            border-color: #ffffff;
+        }
+        
+        /* Tableau Glassmorphism */
+        .dataTables_wrapper {
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            overflow-x: auto;
+        }
+
+        table.dataTable {
+            width: 100% !important; 
+            border-collapse: collapse !important; 
+            font-size: 0.85em; 
+            margin-top: 10px !important;
+        }
+        
+        table.dataTable thead th {
+            background-color: transparent !important; 
+            color: #94a3b8 !important; 
+            padding: 12px 8px !important; 
+            text-align: center; 
+            font-weight: 500;
+            font-size: 0.8em;
+            letter-spacing: 0.3px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
+            white-space: nowrap;
+        }
+        
+        table.dataTable tbody td {
+            background-color: transparent !important;
+            color: #e2e8f0;
+            padding: 10px 8px; 
+            text-align: center; 
+            cursor: pointer;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+        }
+
+        table.dataTable tbody tr:hover td {
+            background-color: rgba(96, 165, 250, 0.1) !important; 
+        }
+
+        /* Éléments DataTables */
+        .dataTables_length, .dataTables_filter, .dataTables_info, .dataTables_paginate {
+            color: #94a3b8 !important;
+            font-size: 0.85em;
+            margin-bottom: 15px;
+        }
+
+        .dataTables_filter input, .dataTables_length select {
+            background: rgba(15, 23, 42, 0.6);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+            padding: 5px 10px;
+            outline: none;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .dataTables_paginate .paginate_button {
+            color: #cbd5e1 !important;
+            border: 1px solid transparent !important;
+            background: transparent !important;
+            border-radius: 4px;
+        }
+
+        .dataTables_paginate .paginate_button.current {
+            background: rgba(255, 255, 255, 0.1) !important;
+            color: #ffffff !important;
+            border-color: rgba(255, 255, 255, 0.2) !important;
+        }
+        /* Fenêtre modale */
+        .modal {
+            display: none; 
+            position: fixed; 
+            z-index: 1000; 
+            left: 0; 
+            top: 0; 
+            width: 100%; 
+            height: 100%; 
+            background-color: rgba(15, 23, 42, 0.7); 
+            backdrop-filter: blur(8px);
+        }
+
+        .modal-content { 
+            background: #0f172a; 
+            margin: 4% auto; 
+            padding: 24px; 
+            border-radius: 12px; 
+            width: 85%; 
+            max-width: 950px; 
+            max-height: 90vh;
+            overflow-y: auto;
+            color: #f1f5f9; 
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); 
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-content h2 {
+            margin-top: 0;
+            color: #ffffff;
+            font-size: 1.2em;
+            font-weight: 500;
+        }
+        
+        .close-btn {
+            color: #64748b; 
+            float: right; 
+            font-size: 24px; 
+            font-weight: normal; 
+            cursor: pointer; 
+            transition: color 0.2s; 
+        }
+        .close-btn:hover { color: #ef4444;}
+        
+        iframe { 
+            width: 100%; 
+            height: 480px; 
+            border: 1px solid rgba(255, 255, 255, 0.1); 
+            margin-top: 12px; 
+            border-radius: 6px; 
+            background: #0f172a; 
+        }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.3); }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
+        
+        /* Footer */
+        .site-footer {
+            margin-top: 30px;
+            text-align: center;
+            font-size: 0.8em;
+            color: #64748b;
+        }
+        .site-footer a {
+            color: #60a5fa;
+            text-decoration: none;
+        }
+        .site-footer a:hover {
+            text-decoration: underline;
+        }
+        .separator {
+            margin: 0 10px;
+            color: #334155;
+        }
+    </style>
+</head>
+<body>
+    <h1>Analyse Quantitative | {{ indice }}</h1>
+    <div id="progressText">Acquisition des données en temps réel en cours...</div>
+
+    <div class="filter-bar">
+        <label>Secteur
+            <select id="filterSecteur">
+                <option value="">Tous les secteurs</option>
+                <option value="Technology">Technologie</option>
+                <option value="Healthcare">Santé</option>
+                <option value="Financial Services">Finance</option>
+                <option value="Consumer Cyclical">Consommation Cyclique</option>
+                <option value="Consumer Defensive">Consommation Défensive</option>
+                <option value="Industrials">Industrie</option>
+                <option value="Energy">Énergie</option>
+                <option value="Utilities">Services Publics</option>
+                <option value="Real Estate">Immobilier</option>
+                <option value="Basic Materials">Matériaux de Base</option>
+            </select>
+        </label>
+        <label>Recommandation 
+            <select id="filterSignal">
+                <option value="">Toutes</option>
+                <option value="ACHAT FORT">Achat Fort</option>
+                <option value="ACHAT">Achat</option>
+                <option value="CONSERVER">Conserver</option>
+                <option value="VENTE">Vente</option>
+            </select>
+        </label>
+        <label>Score Global Min: <input type="number" id="minScore" value="0" min="0" max="100"></label>
+        <label>Qualité Min: <input type="number" id="minQual" value="0" min="0" max="100"></label>
+        <label>Risque Min: <input type="number" id="minRisq" value="0" min="0" max="100"></label>
+        <label>Momentum Min: <input type="number" id="minMom" value="0" min="0" max="100"></label>
+        <label>PER Max: <input type="number" id="maxPER" placeholder="Ex: 25"></label>
+        <label>EV/EBITDA Max: <input type="number" id="maxEVEBITDA" placeholder="Ex: 15"></label>
+        <label>ROIC Min (%): <input type="number" id="minROIC" step="0.5" placeholder="Ex: 10"></label>
+        <label>Spread Min (%): <input type="number" id="minSpread" step="0.5" placeholder="Ex: 2"></label>
+        <label>FCF Yield Min (%): <input type="number" id="minFCFYield" step="0.5" placeholder="Ex: 4"></label>
+        <label>Marge de Séc. (%): <input type="number" id="minMargeSec" step="1" placeholder="Ex: 15"></label>
+        <label>Piotroski Min: <input type="number" id="minPiotroski" value="0" min="0" max="9"></label>
+        <label>Rend. Div. Min (%): <input type="number" id="minDiv" step="0.5" value="0"></label>
+        <label>CAGR CA 3a Min (%): <input type="number" id="minCAGRCA" step="1" placeholder="Ex: 5"></label>
+        <label>CAGR FCF 3a Min (%): <input type="number" id="minCAGRFCF" step="1" placeholder="Ex: 5"></label>
+        <button class="reset-btn" onclick="effacerFiltres()">Réinitialiser</button>
+    </div>
+
+    <table id="screenerTable" class="display">
+        <thead>
+            <tr>
+                <th>Ticker</th><th>Nom</th><th>Secteur</th><th>Devise</th><th>Prix (Local)</th>
+                <th>Score</th><th>Valo</th><th>Qual</th><th>Crois</th><th>Risq</th><th>Mom</th>
+                <th>Recommandation</th><th>ROIC</th><th>Marge Opé</th><th>D/E</th><th>Z-Score</th>
+                <th>WACC</th><th>Spread</th><th>FCF Yield</th><th>PER</th><th>EV/EBITDA</th>
+                <th>Piotroski</th><th>Crois. CA 3a</th><th>Crois. FCF 3a</th><th>Rend. Div.</th>
+                <th>Valeur DCF</th><th>Marge Séc.</th><th>Initiés</th><th>News NLP</th><th>Macro</th><th>Mise à jour</th><th>Profil</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <div id="infoModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn">&times;</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h2 id="modalTitle" style="margin: 0;">Détails de l'actif</h2>
+                <a id="modalYahooLink" href="#" target="_blank" rel="noopener noreferrer" 
+                   style="background: #3b82f6; color: #ffffff; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 0.85em; font-weight: 500;">
+                   🔗 Profil complet (Yahoo)
+                </a>
+            </div>
+            
+            <!-- Bloc de description d'entreprise -->
+            <div id="modalSummaryContainer" style="background: rgba(255, 255, 255, 0.05); padding: 12px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 12px; font-size: 0.85em; color: #cbd5e1; max-height: 120px; overflow-y: auto;">
+                <strong style="color: #60a5fa;">À propos de l'entreprise :</strong>
+                <p id="modalSummaryText" style="margin: 6px 0 0 0; line-height: 1.4;"></p>
+            </div>
+            
+            <iframe id="graphFrame" src=""></iframe>
+        </div>
+    </div>
+    <!-- PIED DE PAGE DISCRET -->
+    <footer class="site-footer">
+        <a href="guide_calculs.html" target="_blank" rel="noopener noreferrer">Méthodologie et détails des calculs (Document interactif)</a>
+        <span class="separator">|</span>
+        <span>© 2026 Plateforme d'Analyse Fondamentale</span>
+    </footer>
+
+    <script src="https://code.jquery.com/jquery-3.7.0.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            var table = $('#screenerTable').DataTable({ "pageLength": 100, "order": [[ 5, "desc" ]] });
+
+            $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+                var secteurFiltre = $('#filterSecteur').val();
+                var minScore = parseFloat($('#minScore').val()) || 0;
+                var maxPER = parseFloat($('#maxPER').val()) || 9999;
+                var minPiotroski = parseInt($('#minPiotroski').val()) || 0;
+                var minDiv = parseFloat($('#minDiv').val()) || 0;
+                var filterSignal = $('#filterSignal').val();
+                
+                var secteur = data[2] || "";
+                var score = parseFloat(data[5]) || 0;
+                var per = parseFloat(data[19]) || 0;
+                var piotroskiStr = data[21] || "0";
+                var piotroskiVal = parseInt(piotroskiStr.split('/')[0]) || 0;
+                var divYield = parseFloat(data[24]) || 0;
+                var signal = data[11] || "";
+                
+                if (secteurFiltre && !secteur.includes(secteurFiltre)) return false;
+                if (score < minScore) return false;
+                if (per > maxPER && data[19] !== "N/A") return false;
+                if (piotroskiVal < minPiotroski) return false;
+                if (divYield < minDiv) return false;
+                if (filterSignal && !signal.toUpperCase().includes(filterSignal)) return false;
+                return true;
+            });
+
+            $('#filterSecteur, #minScore, #maxPER, #minPiotroski, #minDiv, #filterSignal').on('input change', function() { 
+                table.draw(); 
+            });
+
+            function effacerFiltres() {
+                $('#filterSecteur, #filterSignal').val('');
+                $('#minScore, #minQual, #minRisq, #minMom, #minPiotroski, #minDiv').val('0');
+                $('#maxPER, #maxEVEBITDA, #minROIC, #minSpread, #minFCFYield, #minMargeSec, #minCAGRCA, #minCAGRFCF').val('');
+                table.draw();
+            }
+
+            var source = new EventSource(`/stream?indice={{ indice }}&secteur={{ secteur }}`);
+            
+            source.onmessage = function(event) {
+                var row = JSON.parse(event.data);
+                
+                var scoreColor = row['Score /100'] >= 70 ? '#10b981' : (row['Score /100'] <= 40 ? '#ef4444' : '#94a3b8');
+                var signalColor = '#cbd5e1'; 
+                if (row.Signal.includes('ACHAT')) signalColor = '#10b981'; 
+                else if (row.Signal.includes('VENTE')) signalColor = '#ef4444'; 
+                
+                var zScoreVal = parseFloat(row['Z-Score']);
+                var zScoreColor = isNaN(zScoreVal) ? '#64748b' : (zScoreVal >= 3 ? '#10b981' : (zScoreVal <= 1.8 ? '#ef4444' : '#fbbf24'));
+
+                var spreadVal = parseFloat(row['Spread (%)']);
+                var spreadColor = isNaN(spreadVal) ? '#64748b' : (spreadVal > 0 ? '#10b981' : '#ef4444');
+                
+                var margeVal = parseFloat(row['Marge Séc. (%)']);
+                var margeColor = isNaN(margeVal) ? '#64748b' : (margeVal > 15 ? '#10b981' : (margeVal < 0 ? '#ef4444' : '#64748b'));
+                
+                var initColor = '#64748b';
+                if (row.Initiés.includes('Achats')) initColor = '#10b981';
+                else if (row.Initiés.includes('Ventes')) initColor = '#ef4444';
+
+                var trNode = table.row.add([
+                    `<span style="font-weight:500;">${row.Ticker}</span>`, 
+                    row.Nom, 
+                    row.Secteur, 
+                    `<span style="color:#94a3b8; font-size:0.9em;">${row['Devise Origine']}</span>`,
+                    `<span>${row['Prix (Local)']}</span>`,
+                    `<span style="color:${scoreColor}; font-weight:600;">${row['Score /100']}</span>`,
+                    row['Valo /100'], row['Qual /100'], row['Crois /100'], row['Risq /100'], row['Mom /100'],
+                    `<span style="color:${signalColor};">${row.Signal}</span>`, 
+                    row['ROIC (%)'] !== "N/A" ? row['ROIC (%)'] + '%' : "N/A", 
+                    row['Marge Opé (%)'] !== "N/A" ? row['Marge Opé (%)'] + '%' : "N/A",
+                    row['D/E (%)'] !== "N/A" ? row['D/E (%)'] + '%' : "N/A",
+                    `<span style="color:${zScoreColor};">${row['Z-Score'] !== "N/A" ? row['Z-Score'] : "N/A"}</span>`,
+                    row['WACC (%)'] !== "N/A" ? row['WACC (%)'] + '%' : "N/A", 
+                    `<span style="color:${spreadColor};">${row['Spread (%)'] !== "N/A" ? row['Spread (%)'] + '%' : "N/A"}</span>`, 
+                    row['FCF Yield (%)'] !== "N/A" ? row['FCF Yield (%)'] + '%' : "N/A", 
+                    row.PER, 
+                    row['EV/EBITDA'], 
+                    row.Piotroski,
+                    row['CAGR CA 3y (%)'] !== "N/A" ? row['CAGR CA 3y (%)'] + '%' : "N/A", 
+                    row['CAGR FCF 3y (%)'] !== "N/A" ? row['CAGR FCF 3y (%)'] + '%' : "N/A", 
+                    row['Div Yield (%)'] !== "N/A" ? row['Div Yield (%)'] + '%' : "N/A",
+                    row['Valeur DCF'] !== "N/A" ? row['Valeur DCF'] : "N/A",
+                    `<span style="color:${margeColor};">${row['Marge Séc. (%)'] !== "N/A" ? row['Marge Séc. (%)'] + '%' : "N/A"}</span>`,
+                    `<span style="color:${initColor};">${row.Initiés || "N/A"}</span>`,
+                    row.News || "Neutre ⚪",
+                    row.Macro, 
+                    row['Mise à jour'],
+                    `<a href="${row.Yahoo_URL}" target="_blank" onclick="event.stopPropagation();" style="color:#60a5fa; text-decoration:none;">🔗 Yahoo</a>`
+                ]).draw(false).node();
+                
+                $(trNode).attr('data-graph', row.Graph_URL);$(trNode).attr('data-ticker', row.Ticker);
+                $(trNode).attr('data-nom', row.Nom);$(trNode).attr('data-summary', row.Summary || "Aucune description de l'entreprise disponible.");
+                $(trNode).attr('data-yahoourl', row.Yahoo_URL || "#");
+            };
+
+            source.addEventListener('close', function(event) {
+                $('#progressText').text(`Processus d'analyse terminé.`);
+                source.close();
+            });
+
+            $('#screenerTable tbody').on('click', 'tr', function () {
+                var graphUrl = $(this).attr('data-graph');
+                var ticker = $(this).attr('data-ticker');
+                var nom = $(this).attr('data-nom');
+                var summary = $(this).attr('data-summary');
+                var yahooUrl = $(this).attr('data-yahoourl');
+
+                if (graphUrl) {
+                    $('#modalTitle').text(nom + ' (' + ticker + ')');
+                    $('#modalSummaryText').text(summary);
+                    $('#modalYahooLink').attr('href', yahooUrl);
+                    $('#graphFrame').attr('src', graphUrl);
+                    $('#infoModal').fadeIn();
+                }
+            });
+
+            $('.close-btn, .modal').click(function(e) {
+                if (e.target !== this) return;
+                $('#infoModal').fadeOut();
+                $('#graphFrame').attr('src', '');
+            });
+        });
+    </script>
+</body>
+</html>
