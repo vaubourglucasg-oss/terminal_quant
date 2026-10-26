@@ -394,8 +394,8 @@
                 table.draw();
             }
 
-            var indiceEncode = encodeURIComponent("{{ indice }}");
-            var secteurEncode = encodeURIComponent("{{ secteur }}");
+            var indiceEncode = encodeURIComponent("{{ indice | safe }}");
+            var secteurEncode = encodeURIComponent("{{ secteur | safe }}");
             var source = new EventSource(`/stream?indice=${indiceEncode}&secteur=${secteurEncode}`);
             
             source.onmessage = function(event) {
