@@ -394,7 +394,9 @@
                 table.draw();
             }
 
-            var source = new EventSource(`/stream?indice={{ indice }}&secteur={{ secteur }}`);
+            var indiceEncode = encodeURIComponent("{{ indice }}");
+            var secteurEncode = encodeURIComponent("{{ secteur }}");
+            var source = new EventSource(`/stream?indice=${indiceEncode}&secteur=${secteurEncode}`);
             
             source.onmessage = function(event) {
                 var row = JSON.parse(event.data);

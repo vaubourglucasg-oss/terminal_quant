@@ -98,9 +98,16 @@ async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
         except Exception as e:
             print(f"Erreur chargement S&P 500: {e}")
             tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "NFLX", "AMD", "INTC"]
+    
+    elif indice in TICKERS_PAR_INDICE:
+        # On pioche dans ton dictionnaire si l'indice existe
+        tickers = TICKERS_PAR_INDICE[indice]
+        
     else:
-        tickers = TICKERS_PAR_INDICE.get(indice, ["MC.PA", "TTE.PA", "AI.PA"])
+        # Sécurité ultime par défaut
+        tickers = ["MC.PA", "TTE.PA", "AI.PA"]
 
+    
     async def generer_analyses():
         for ticker in tickers:
             resultat = await asyncio.to_thread(analyser_action_complete, ticker, secteurs_cibles, taux_du_jour, donnees_macro)
