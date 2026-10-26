@@ -97,7 +97,7 @@
             
             <div class="section-title">Amérique du Nord</div>
             <div class="grid">
-                {% for tk in ["S&P 500", "NASDAQ 100", "Dow Jones", "TSX 60"] %}
+                {% for tk in ["SP 500", "NASDAQ 100", "Dow Jones", "TSX 60"] %}
                 {% if tk in recoms %}
                 <div class="btn-card indice-btn {% if tk == 'CAC 40' %}selected{% endif %}" onclick="selectIndice(this, '{{ tk }}')">
                     <div class="btn-title"><span>{{ tk }}</span> <span class="badge {{ recoms[tk].style }}">{{ recoms[tk].badge }}</span></div>
