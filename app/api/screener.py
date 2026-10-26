@@ -34,6 +34,42 @@ TICKERS_PAR_INDICE = {
     "Bovespa": ["ABEV3.SA", "ALOS3.SA", "AZUL4.SA", "B3SA3.SA", "BBAS3.SA", "BBDC3.SA", "BBDC4.SA", "BBSE3.SA", "BEEF3.SA", "BPAC11.SA", "BRAP4.SA", "BRFS3.SA", "BRKM5.SA", "CCRO3.SA", "CIEL3.SA", "CMIG4.SA", "CMIN3.SA", "COGN3.SA", "CPFE3.SA", "CPLE6.SA", "CRFB3.SA", "CSAN3.SA", "CSNA3.SA", "CVCB3.SA", "CYRE3.SA", "DXCO3.SA", "EGIE3.SA", "ELET3.SA", "ELET6.SA", "EMBR3.SA", "ENGI11.SA", "EQTL3.SA", "EZTC3.SA", "FLRY3.SA", "GGBR4.SA", "GOAU4.SA", "GOLL4.SA", "HAPV3.SA", "HYPE3.SA", "IGTI11.SA", "IRBR3.SA", "ITSA4.SA", "ITUB4.SA", "JBSS3.SA", "KLBN11.SA", "LREN3.SA", "LWSA3.SA", "MGLU3.SA", "MRFG3.SA", "MRVE3.SA", "MULT3.SA", "NTCO3.SA", "PCAR3.SA", "PETR3.SA", "PETR4.SA", "PETZ3.SA", "PRIO3.SA", "RADL3.SA", "RAIZ4.SA", "RDOR3.SA", "RENT3.SA", "RECV3.SA", "SANB11.SA", "SBSP3.SA", "SLCE3.SA", "SMTO3.SA", "SOMA3.SA", "SUZB3.SA", "TAEE11.SA", "TIMS3.SA", "TOTS3.SA", "UGPA3.SA", "USIM5.SA", "VALE3.SA", "VBBR3.SA", "VIIA3.SA", "VIVT3.SA", "WEGE3.SA", "YDUQ3.SA"]
 }
 
+
+# =========================================================================
+# ORGANISATION EXACTE DE TON ANCIEN CODE : SÉPARATION DE LA PRÉPARATION 
+# =========================================================================
+
+def obtenir_tickers_pour_indice(indice: str):
+    """
+    Agit exactement comme ton ancien executer_scan() :
+    prépare et télécharge proprement la liste d'actions AVANT de lancer l'analyse.
+    """
+    if indice == "SP 500" or indice == "S&P 500":
+        try:
+            url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+            df_tickers = pd.read_csv(url)
+            tickers = df_tickers['Symbol'].dropna().astype(str).tolist()
+            return [t.replace(".", "-") for t in tickers]
+        except Exception as e:
+            print(f"Erreur chargement S&P 500: {e}")
+            return [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JNJ", 
+                "JPM", "V", "PG", "MA", "HD", "CVX", "ABBV", "LLY", "MRK", "PEP", "COST", "PFE", 
+                "KO", "TMO", "AVGO", "MCD", "WMT", "CRM", "CSCO", "ABT", "BAC", "ACN", "LIN"
+            ]
+            
+    elif indice in TICKERS_PAR_INDICE:
+        return TICKERS_PAR_INDICE[indice]
+        
+    else:
+        # Fallback de sécurité robuste
+        return ["MC.PA", "TTE.PA", "AI.PA"]
+
+
+# =========================================================================
+# GESTION DES RECOMMANDATIONS MACRO
+# =========================================================================
+
 def analyser_recommandations_tous_indices(donnees_macro):
     vix = donnees_macro.get("Volatilité VIX", 0)
     tnx = donnees_macro.get("Taux 10 Ans", 0)
@@ -46,7 +82,7 @@ def analyser_recommandations_tous_indices(donnees_macro):
     recoms = {}
     
     # Amérique du Nord
-    recoms["S&P 500"] = {"badge": "🔥 TOP SCAN" if vix < 18 else "⚪ NEUTRE", "style": "badge-top" if vix < 18 else "badge-neutral", "conseil": "Marché global US stable. Idéal pour un scan large sur les grands leaders mondiaux."}
+    recoms["SP 500"] = {"badge": "🔥 TOP SCAN" if vix < 18 else "⚪ NEUTRE", "style": "badge-top" if vix < 18 else "badge-neutral", "conseil": "Marché global US stable. Idéal pour un scan large sur les grands leaders mondiaux."}
     recoms["NASDAQ 100"] = {"badge": "⚡ OPPORTUNITÉ TECH" if (vix > 20 or tnx < -0.5) else "🟢 FAVORABLE", "style": "badge-opp" if (vix > 20 or tnx < -0.5) else "badge-fav", "conseil": "Tension/Repli sur les taux : opportunité de dénicher des pépites de croissance à prix réduit."}
     recoms["Dow Jones"] = {"badge": "🟢 VALUE SOLIDE" if tnx > 0.5 else "⚪ NEUTRE", "style": "badge-fav" if tnx > 0.5 else "badge-neutral", "conseil": "Taux soutenus : environnement idéal pour les conglomérats industriels et financières US."}
     recoms["TSX 60"] = {"badge": "🔥 BOOM MATIÈRES" if (petrole > 1.5 or or_val > 1.5) else "⚪ NEUTRE", "style": "badge-top" if (petrole > 1.5 or or_val > 1.5) else "badge-neutral", "conseil": "Énergie et métaux précieux au vert : très forte génération de Free Cash Flow au Canada."}
@@ -72,12 +108,17 @@ def analyser_recommandations_tous_indices(donnees_macro):
     recoms["Bovespa"] = {"badge": "🔥 COMMODITIES" if petrole > 1.0 else "⚪ NEUTRE", "style": "badge-top" if petrole > 1.0 else "badge-neutral", "conseil": "Valorisations très bon marché sur les géants brésiliens des matières premières."}
     return recoms
 
+
+# =========================================================================
+# ROUTES WEB FastAPI
+# =========================================================================
+
 @router.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request):
     donnees_macro = await asyncio.to_thread(analyser_tendances_macro)
     recoms = analyser_recommandations_tous_indices(donnees_macro)
     tops = [k for k, v in recoms.items() if "🔥" in v["badge"] or "⚡" in v["badge"]][:2]
-    top_text = " • ".join(tops) if tops else "CAC 40 • S&P 500"
+    top_text = " • ".join(tops) if tops else "CAC 40 • SP 500"
     return templates.TemplateResponse(request, "index.html", {"recoms": recoms, "top_text": top_text})
 
 @router.get("/run", response_class=HTMLResponse)
@@ -88,26 +129,14 @@ async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str 
 async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
     secteurs_cibles = [secteur] if secteur else []
     
+    # 1. Analyse macro préalable
     donnees_macro = await asyncio.to_thread(analyser_tendances_macro)
     taux_du_jour = await asyncio.to_thread(obtenir_taux_sans_risque)
     
-    if indice == "S&P 500":
-        try:
-            df_tickers = pd.read_csv("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv")
-            tickers = [str(t).replace(".", "-") for t in df_tickers['Symbol'].dropna()]
-        except Exception as e:
-            print(f"Erreur chargement S&P 500: {e}")
-            tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "NFLX", "AMD", "INTC"]
-    
-    elif indice in TICKERS_PAR_INDICE:
-        # On pioche dans ton dictionnaire si l'indice existe
-        tickers = TICKERS_PAR_INDICE[indice]
-        
-    else:
-        # Sécurité ultime par défaut
-        tickers = ["MC.PA", "TTE.PA", "AI.PA"]
+    # 2. Utilisation de la nouvelle fonction propre pour récupérer la liste
+    tickers = obtenir_tickers_pour_indice(indice)
 
-    
+    # 3. Moteur d'analyse en temps réel (SSE)
     async def generer_analyses():
         for ticker in tickers:
             resultat = await asyncio.to_thread(analyser_action_complete, ticker, secteurs_cibles, taux_du_jour, donnees_macro)
