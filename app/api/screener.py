@@ -95,7 +95,9 @@ async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
         try:
             df_tickers = pd.read_csv("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv")
             tickers = [str(t).replace(".", "-") for t in df_tickers['Symbol'].dropna()]
-        except: tickers = ["AAPL", "MSFT", "GOOGL", "AMZN"]
+        except Exception as e:
+            print(f"Erreur chargement S&P 500: {e}")
+            tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "NFLX", "AMD", "INTC"]
     else:
         tickers = TICKERS_PAR_INDICE.get(indice, ["MC.PA", "TTE.PA", "AI.PA"])
 
