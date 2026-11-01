@@ -128,15 +128,15 @@
             color: #fff; padding: 8px; border-radius: 6px; font-family: 'Inter', sans-serif;
         }
         
-        /* Table Container */
+        /* Table Container (Scrolly) */
         .table-container {
             background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color);
-            border-radius: 12px; padding: 20px;
+            border-radius: 12px; padding: 20px; overflow-x: auto;
         }
         
         /* DataTable Overrides */
-        table.dataTable { width: 100% !important; border-collapse: collapse !important; font-size: 0.85em; }
-        table.dataTable thead th { border-bottom: 1px solid var(--border-color) !important; color: var(--text-muted) !important; font-weight: 600; padding: 12px 8px !important; }
+        table.dataTable { width: 100% !important; border-collapse: collapse !important; font-size: 0.85em; white-space: nowrap; }
+        table.dataTable thead th { border-bottom: 1px solid var(--border-color) !important; color: var(--text-muted) !important; font-weight: 600; padding: 12px 8px !important; text-align: center; }
         table.dataTable tbody td { border-bottom: 1px solid rgba(255,255,255,0.05) !important; padding: 12px 8px; background: transparent !important; color: #e2e8f0; text-align: center; }
         table.dataTable tbody tr:hover td { background-color: rgba(59, 130, 246, 0.05) !important; }
         .dataTables_wrapper .dataTables_length, .dataTables_wrapper .dataTables_filter { color: var(--text-muted); margin-bottom: 15px; }
@@ -241,7 +241,14 @@
                         <option value="Energy">Énergie</option>
                     </select>
                 </label>
-                <label>Signal Algo <select id="filterSignal"><option value="">Tous</option><option value="ACHAT FORT">Achat Fort</option><option value="ACHAT">Achat</option><option value="VENTE">Vente</option></select></label>
+                <label>Signal Algo 
+                    <select id="filterSignal">
+                        <option value="">Tous</option>
+                        <option value="ACHAT FORT">Achat Fort</option>
+                        <option value="ACHAT">Achat</option>
+                        <option value="VENTE">Vente</option>
+                    </select>
+                </label>
                 <label>Score Min: <input type="number" id="minScore" value="0"></label>
                 <label>PER Max: <input type="number" id="maxPER" placeholder="Ex: 20"></label>
                 <label>ROIC Min (%): <input type="number" id="minROIC" placeholder="Ex: 15"></label>
@@ -256,11 +263,14 @@
                 <table id="screenerTable" class="display">
                     <thead>
                         <tr>
-                            <th>⭐</th><th>Ticker</th><th>Nom</th><th>Secteur</th><th>Prix</th>
-                            <th>Score</th><th>Qual</th><th>Risq</th><th>Mom</th>
-                            <th>Algo Signal</th><th>ROIC</th><th>Marge Opé</th><th>Z-Score</th>
-                            <th>WACC</th><th>Spread</th><th>PER</th>
-                            <th>Piotroski</th><th>Rend. Div.</th><th>Marge Séc.</th><th>NLP News</th>
+                            <th>⭐</th>
+                            <th>Ticker</th><th>Nom</th><th>Secteur</th><th>Devise</th><th>Prix (Local)</th>
+                            <th>Score</th><th>Valo</th><th>Qual</th><th>Crois</th><th>Risq</th><th>Mom</th>
+                            <th>Signal</th><th>ROIC</th><th>Marge Opé</th><th>D/E</th><th>Z-Score</th>
+                            <th>WACC</th><th>Spread</th><th>FCF Yield</th><th>PER</th><th>EV/EBITDA</th>
+                            <th>Piotroski</th><th>Crois. CA 3a</th><th>Crois. FCF 3a</th><th>Rend. Div.</th>
+                            <th>Valeur DCF</th><th>Marge Séc.</th><th>Initiés</th><th>News NLP</th><th>Macro</th>
+                            <th>Mise à jour</th><th>Profil</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -275,7 +285,7 @@
             <span class="close-btn">&times;</span>
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <h2 id="modalTitle" style="margin: 0;">Détails Actif</h2>
-                <a id="modalYahooLink" href="#" target="_blank" style="background: var(--accent); color: #fff; padding: 8px 15px; border-radius: 6px; text-decoration: none; font-size: 0.85em; font-weight: 500;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Yahoo Finance</a>
+                <a id="modalYahooLink" href="#" target="_blank" style="background: var(--accent); color: #fff; padding: 8px 15px; border-radius: 6px; text-decoration: none; font-size: 0.85em; font-weight: 500;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Profil Yahoo</a>
             </div>
             <div id="modalSummaryContainer" style="margin-top: 15px; font-size: 0.85em; color: var(--text-muted); line-height: 1.5; max-height: 80px; overflow-y: auto;">
                 <p id="modalSummaryText"></p>
@@ -299,8 +309,8 @@
 
             // Initialisation Table avec Bouton Export
             var table = $('#screenerTable').DataTable({ 
-                "pageLength": 50, 
-                "order": [[ 5, "desc" ]],
+                "pageLength": 100, 
+                "order": [[ 6, "desc" ]], // Index 6 car le Score est décalé par rapport à ⭐, Ticker, etc.
                 "dom": 'Bfrtip',
                 "buttons": [
                     { extend: 'csv', text: '<i class="fa-solid fa-file-csv"></i> Exporter CSV', className: 'dt-button' },
@@ -308,7 +318,7 @@
                 ]
             });
 
-            // Filtres Personnalisés
+            // Filtres Personnalisés (adaptés aux nouveaux index de colonnes)
             $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
                 var secteurFiltre = $('#filterSecteur').val();
                 var minScore = parseFloat($('#minScore').val()) || 0;
@@ -324,23 +334,23 @@
                 if (favOnly === 'yes' && !favoris[ticker]) return false;
 
                 var secteur = data[3] || "";
-                var score = parseFloat(data[5]) || 0;
-                var roic = parseFloat(data[10]) || -999;
-                var per = parseFloat(data[15]) || 0;
-                var piotroskiStr = data[16] || "0";
+                var score = parseFloat(data[6]) || 0;
+                var signal = data[12] || "";
+                var roic = parseFloat(data[13]) || -999;
+                var per = parseFloat(data[20]) || 0;
+                var piotroskiStr = data[22] || "0";
                 var piotroskiVal = parseInt(piotroskiStr.split('/')[0]) || 0;
-                var divYield = parseFloat(data[17]) || 0;
-                var margeSec = parseFloat(data[18]) || -999;
-                var signal = data[9] || "";
+                var divYield = parseFloat(data[25]) || 0;
+                var margeSec = parseFloat(data[27]) || -999;
                 
                 if (secteurFiltre && !secteur.includes(secteurFiltre)) return false;
                 if (score < minScore) return false;
-                if (per > maxPER && data[15] !== "N/A") return false;
+                if (per > maxPER && data[20] !== "N/A") return false;
                 if (piotroskiVal < minPiotroski) return false;
                 if (divYield < minDiv) return false;
-                if (roic < minROIC && data[10] !== "N/A") return false;
-                if (margeSec < minMargeSec && data[18] !== "N/A") return false;
-                if (filterSignal && !signal.toUpperCase().includes(filterSignal)) return false;
+                if (roic < minROIC && data[13] !== "N/A") return false;
+                if (margeSec < minMargeSec && data[27] !== "N/A") return false;
+                if (filterSignal && !signal.toUpperCase().includes(filterSignal.toUpperCase())) return false;
                 
                 return true;
             });
@@ -403,29 +413,46 @@
                 
                 var margeVal = parseFloat(row['Marge Séc. (%)']);
                 var margeColor = isNaN(margeVal) ? 'var(--text-muted)' : (margeVal > 15 ? 'var(--success)' : (margeVal < 0 ? 'var(--danger)' : 'var(--text-muted)'));
+
+                // Nouveau : Couleur dynamique pour les initiés
+                var initColor = 'var(--text-muted)';
+                if (row.Initiés && row.Initiés.includes('Achats')) initColor = 'var(--success)';
+                else if (row.Initiés && row.Initiés.includes('Ventes')) initColor = 'var(--danger)';
                 
                 let isFav = favoris[row.Ticker] ? 'active' : '';
                 let starHtml = `<i class="fa-solid fa-star star-icon ${isFav}" data-ticker="${row.Ticker}"></i>`;
 
+                // Intégration des 32 colonnes complètes (+ ⭐ = 33)
                 var trNode = table.row.add([
                     starHtml,
                     `<span style="font-weight:600; color:#fff;">${row.Ticker}</span>`, 
                     row.Nom, 
                     row.Secteur, 
+                    `<span style="color:var(--text-muted); font-size:0.9em;">${row['Devise Origine']}</span>`,
                     `${row['Prix (Local)']}`,
                     `<span style="color:${scoreColor}; font-weight:700;">${row['Score /100']}</span>`,
-                    row['Qual /100'], row['Risq /100'], row['Mom /100'],
+                    row['Valo /100'], row['Qual /100'], row['Crois /100'], row['Risq /100'], row['Mom /100'],
                     `<span style="color:${signalColor}; font-weight:600;">${row.Signal}</span>`, 
                     row['ROIC (%)'] !== "N/A" ? row['ROIC (%)'] + '%' : "N/A", 
                     row['Marge Opé (%)'] !== "N/A" ? row['Marge Opé (%)'] + '%' : "N/A",
+                    row['D/E (%)'] !== "N/A" ? row['D/E (%)'] + '%' : "N/A",
                     `<span style="color:${zScoreColor};">${row['Z-Score'] !== "N/A" ? row['Z-Score'] : "N/A"}</span>`,
                     row['WACC (%)'] !== "N/A" ? row['WACC (%)'] + '%' : "N/A", 
                     `<span style="color:${spreadColor};">${row['Spread (%)'] !== "N/A" ? row['Spread (%)'] + '%' : "N/A"}</span>`, 
+                    row['FCF Yield (%)'] !== "N/A" ? row['FCF Yield (%)'] + '%' : "N/A", 
                     row.PER, 
+                    row['EV/EBITDA'], 
                     row.Piotroski,
+                    row['CAGR CA 3y (%)'] !== "N/A" ? row['CAGR CA 3y (%)'] + '%' : "N/A", 
+                    row['CAGR FCF 3y (%)'] !== "N/A" ? row['CAGR FCF 3y (%)'] + '%' : "N/A", 
                     row['Div Yield (%)'] !== "N/A" ? row['Div Yield (%)'] + '%' : "N/A",
+                    row['Valeur DCF'] !== "N/A" ? row['Valeur DCF'] : "N/A",
                     `<span style="color:${margeColor};">${row['Marge Séc. (%)'] !== "N/A" ? row['Marge Séc. (%)'] + '%' : "N/A"}</span>`,
-                    row.News || "Neutre ⚪"
+                    `<span style="color:${initColor};">${row.Initiés || "N/A"}</span>`,
+                    row.News || "Neutre ⚪",
+                    row.Macro, 
+                    row['Mise à jour'],
+                    `<a href="${row.Yahoo_URL}" target="_blank" onclick="event.stopPropagation();" style="color:var(--accent); text-decoration:none;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Yahoo</a>`
                 ]).draw(false).node();
                 
                 $(trNode).attr('data-graph', row.Graph_URL);
@@ -456,7 +483,7 @@
 
             // Handle Row Click for Modal
             $('#screenerTable tbody').on('click', 'tr', function (e) {
-                if ($(e.target).hasClass('star-icon')) return; // Ignore if clicked on star
+                if ($(e.target).hasClass('star-icon') || $(e.target).closest('a').length) return;
 
                 var graphUrl = $(this).attr('data-graph');
                 var ticker = $(this).attr('data-ticker');
