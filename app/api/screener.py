@@ -36,7 +36,7 @@ async def terminal_unifie(request: Request, indice: str = "CAC 40"):
     recoms = analyser_recommandations_tous_indices(donnees_macro)
     
     # Note le "T" majuscule ici si tu gardes le fichier sous le nom Terminal.html
-    return templates.TemplateResponse(request, "Terminal.html", {
+    return templates.TemplateResponse(request, "index.html", {
         "indice_actuel": indice,
         "recoms": recoms,
         "indices_dispos": list(TICKERS_PAR_INDICE.keys())
