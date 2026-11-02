@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Quant SaaS - Terminal {{ indice }}</title>
+    <!-- Dependencies CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        :root {
+            --bg-sidebar: #0a0f1d;
+            --bg-main: #0f172a;
+            --glass-card: rgba(15, 23, 42, 0.75);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --accent: #38bdf8;
+            --accent-hover: #0284c7;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --success: #34d399;
+            --danger: #f87171;
+            --warning: #fbbf24;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            overflow: hidden;
+        }
+
+        /* --- SIDEBAR --- */
+        .sidebar {
+            width: 260px;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 20px 0;
+            z-index: 10;
+        }
+        .sidebar-header {
+            padding: 0 20px 20px 20px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 20px;
+        }
+        .sidebar-header h2 { margin: 0; font-size: 1.3em; font-weight: 700; color: #fff; }
+        .sidebar-header p { margin: 4px 0 0 0; font-size: 0.75em; color: var(--accent); font-weight: 600; }
+
+        .nav-menu { list-style: none; padding: 0; margin: 0; }
+        .nav-item {
+            padding: 12px 20px;
+            cursor: pointer;
+            transition: 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        .nav-item:hover, .nav-item.active {
+            background-color: rgba(56, 189, 248, 0.1);
+            color: var(--accent);
+            border-left: 3px solid var(--accent);
+        }
+
+        .sidebar-section {
+            margin-top: 25px;
+            padding: 0 20px;
+            font-size: 0.7em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #64748b;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        /* --- MAIN CONTENT --- */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            background: radial-gradient(circle at top right, #1e293b 0%, #0f172a 60%);
+        }
+
+        .topbar {
+            height: 65px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 30px;
+            background-color: rgba(10, 15, 29, 0.6);
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        .topbar h1 { margin: 0; font-size: 1.1em; font-weight: 600; }
+
+        .dashboard-container { padding: 25px; }
+
+        /* KPI Cards */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .kpi-card {
+            background: var(--glass-card);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 16px;
+        }
+        .kpi-card h3 { margin: 0; font-size: 0.75em; color: var(--text-muted); text-transform: uppercase; }
+        .kpi-card .value { font-size: 1.8em; font-weight: 700; color: #fff; margin: 8px 0 2px 0; }
+        .kpi-card .sub-text { font-size: 0.75em; color: var(--success); }
+
+        /* Actions & Filters */
+        .tools-bar { display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; }
+        .preset-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            color: #fff;
+            padding: 7px 14px;
+            border-radius: 6px;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .preset-btn:hover { background: var(--accent-hover); border-color: var(--accent); }
+
+        /* Table Wrapper */
+        .table-container {
+            background: var(--glass-card);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 15px;
+            overflow-x: auto;
+        }
+
+        table.dataTable { width: 100% !important; font-size: 0.82em; white-space: nowrap; }
+        table.dataTable thead th { border-bottom: 1px solid var(--border-color) !important; color: var(--text-muted) !important; padding: 10px !important; text-align: center; }
+        table.dataTable tbody td { border-bottom: 1px solid var(--border-color) !important; padding: 10px; background: transparent !important; color: #e2e8f0; text-align: center; }
+        table.dataTable tbody tr:hover td { background-color: rgba(56, 189, 248, 0.05) !important; }
+
+        .dt-buttons .dt-button {
+            background: var(--accent) !important;
+            color: #000 !important;
+            border: none !important;
+            border-radius: 5px !important;
+            font-size: 0.8em !important;
+            font-weight: 600 !important;
+            padding: 5px 12px !important;
+            margin-bottom: 12px;
+        }
+
+        .star-icon { cursor: pointer; color: var(--border-color); font-size: 1.1em; }
+        .star-icon.active { color: var(--warning); }
+    </style>
+</head>
+<body>
+
+    <!-- SIDEBAR -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>Quant Terminal</h2>
+            <p>Cloud SaaS Edition</p>
+        </div>
+        
+        <div class="sidebar-section">Changer d'Indice</div>
+        <ul class="nav-menu">
+            <li><a href="/run?indice=CAC+40" class="nav-item {% if 'CAC' in indice %}active{% endif %}"><i class="fa-solid fa-wine-bottle"></i> CAC 40</a></li>
+            <li><a href="/run?indice=SP+500" class="nav-item {% if '500' in indice %}active{% endif %}"><i class="fa-solid fa-flag-usa"></i> S&P 500</a></li>
+            <li><a href="/run?indice=NASDAQ+100" class="nav-item {% if 'NASDAQ' in indice %}active{% endif %}"><i class="fa-solid fa-microchip"></i> NASDAQ 100</a></li>
+            <li><a href="/run?indice=DAX+40" class="nav-item {% if 'DAX' in indice %}active{% endif %}"><i class="fa-solid fa-industry"></i> DAX 40</a></li>
+            <li><a href="/run?indice=Nikkei+225" class="nav-item {% if 'Nikkei' in indice %}active{% endif %}"><i class="fa-solid fa-torii-gate"></i> Nikkei 225</a></li>
+        </ul>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div class="main-content">
+        <div class="topbar">
+            <h1>Screener Actif : <span style="color: var(--accent);">{{ indice }}</span></h1>
+            <div style="font-size: 0.8em; color: var(--text-muted);" id="statusText">
+                <i class="fa-solid fa-circle-notch fa-spin"></i> Traitement du flux temps réel...
+            </div>
+        </div>
+
+        <div class="dashboard-container">
+            <!-- KPIs -->
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <h3>Actions Scannées</h3>
+                    <div class="value" id="kpi-total">0</div>
+                    <div class="sub-text">Flux SSE connecté</div>
+                </div>
+                <div class="kpi-card">
+                    <h3>Signaux d'Achat</h3>
+                    <div class="value" id="kpi-achats" style="color: var(--success);">0</div>
+                    <div class="sub-text">Filtre Algo</div>
+                </div>
+                <div class="kpi-card">
+                    <h3>Score Moyen</h3>
+                    <div class="value" id="kpi-score">0.0</div>
+                    <div class="sub-text">Sur 100 pts</div>
+                </div>
+            </div>
+
+            <!-- PRESETS -->
+            <div class="tools-bar">
+                <button class="preset-btn" onclick="effacerFiltres()"><i class="fa-solid fa-rotate-right"></i> Réinitialiser les filtres</button>
+            </div>
+
+            <!-- TABLEAU -->
+            <div class="table-container">
+                <table id="screenerTable" class="display">
+                    <thead>
+                        <tr>
+                            <th>⭐</th>
+                            <th>Ticker</th><th>Nom</th><th>Secteur</th><th>Devise</th><th>Prix</th>
+                            <th>Score</th><th>Valo</th><th>Qual</th><th>Crois</th><th>Risq</th><th>Mom</th>
+                            <th>Signal</th><th>ROIC</th><th>Marge Opé</th><th>D/E</th><th>Z-Score</th>
+                            <th>WACC</th><th>Spread</th><th>FCF Yield</th><th>PER</th><th>EV/EBITDA</th>
+                            <th>Piotroski</th><th>Crois. CA</th><th>Crois. FCF</th><th>Rend. Div</th>
+                            <th>DCF</th><th>Marge Séc.</th><th>Macro</th><th>Mise à jour</th><th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS DEPENDENCIES -->
+    <script src="https://code.jquery.com/jquery-3.7.0.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
+
+    <script>
+        $(document).ready(function() {
+            let favoris = JSON.parse(localStorage.getItem('quant_favoris')) || {};
+
+            var table = $('#screenerTable').DataTable({ 
+                "pageLength": 100, 
+                "order": [[ 6, "desc" ]],
+                "dom": 'Bfrtip',
+                "buttons": [
+                    { extend: 'csv', text: '<i class="fa-solid fa-file-csv"></i> Export CSV', className: 'dt-button' },
+                    { extend: 'excel', text: '<i class="fa-solid fa-file-excel"></i> Export Excel', className: 'dt-button' }
+                ]
+            });
+
+            window.effacerFiltres = function() {
+                table.search('').columns().search('').draw();
+            };
+
+            let total = 0, achats = 0, scoreSum = 0;
+
+            var indiceEncode = encodeURIComponent("{{ indice | safe }}");
+            var source = new EventSource(`/stream?indice=${indiceEncode}`);
+            
+            source.onmessage = function(event) {
+                var row = JSON.parse(event.data);
+                
+                total++;
+                if (row.Signal && row.Signal.includes('ACHAT')) achats++;
+                scoreSum += row['Score /100'] || 0;
+
+                $('#kpi-total').text(total);
+                $('#kpi-achats').text(achats);
+                $('#kpi-score').text((scoreSum / total).toFixed(1));
+
+                var scoreColor = row['Score /100'] >= 70 ? 'var(--success)' : (row['Score /100'] <= 40 ? 'var(--danger)' : 'var(--text-muted)');
+                var signalColor = (row.Signal && row.Signal.includes('ACHAT')) ? 'var(--success)' : ((row.Signal && row.Signal.includes('VENTE')) ? 'var(--danger)' : 'var(--text-muted)');
+                
+                let isFav = favoris[row.Ticker] ? 'active' : '';
+                let starHtml = `<i class="fa-solid fa-star star-icon ${isFav}" data-ticker="${row.Ticker}"></i>`;
+
+                table.row.add([
+                    starHtml,
+                    `<strong style="color:#fff;">${row.Ticker}</strong>`, 
+                    row.Nom || "N/A", 
+                    row.Secteur || "N/A", 
+                    row['Devise Origine'] || "USD",
+                    row['Prix (Local)'] || "N/A",
+                    `<span style="color:${scoreColor}; font-weight:700;">${row['Score /100']}</span>`,
+                    row['Valo /100'], row['Qual /100'], row['Crois /100'], row['Risq /100'], row['Mom /100'],
+                    `<span style="color:${signalColor}; font-weight:600;">${row.Signal}</span>`, 
+                    row['ROIC (%)'] !== "N/A" ? row['ROIC (%)'] + '%' : "N/A", 
+                    row['Marge Opé (%)'] !== "N/A" ? row['Marge Opé (%)'] + '%' : "N/A",
+                    row['D/E (%)'] !== "N/A" ? row['D/E (%)'] + '%' : "N/A",
+                    row['Z-Score'] || "N/A",
+                    row['WACC (%)'] !== "N/A" ? row['WACC (%)'] + '%' : "N/A", 
+                    row['Spread (%)'] !== "N/A" ? row['Spread (%)'] + '%' : "N/A", 
+                    row['FCF Yield (%)'] !== "N/A" ? row['FCF Yield (%)'] + '%' : "N/A", 
+                    row.PER || "N/A", 
+                    row['EV/EBITDA'] || "N/A", 
+                    row.Piotroski || "N/A",
+                    row['CAGR CA 3y (%)'] !== "N/A" ? row['CAGR CA 3y (%)'] + '%' : "N/A", 
+                    row['CAGR FCF 3y (%)'] !== "N/A" ? row['CAGR FCF 3y (%)'] + '%' : "N/A", 
+                    row['Div Yield (%)'] !== "N/A" ? row['Div Yield (%)'] + '%' : "N/A",
+                    row['Valeur DCF'] || "N/A",
+                    row['Marge Séc. (%)'] !== "N/A" ? row['Marge Séc. (%)'] + '%' : "N/A",
+                    row.Macro || "Neutre ⚪", 
+                    row['Mise à jour'] || "",
+                    `<a href="${row.Yahoo_URL}" target="_blank" style="color:var(--accent);"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>`
+                ]).draw(false);
+            };
+
+            source.addEventListener('close', function(event) {
+                $('#statusText').html(`<i class="fa-solid fa-check" style="color:var(--success);"></i> Analyse terminée.`);
+                source.close();
+            });
+
+            $('#screenerTable tbody').on('click', '.star-icon', function(e) {
+                e.stopPropagation();
+                let ticker = $(this).attr('data-ticker');
+                if (favoris[ticker]) {
+                    delete favoris[ticker];
+                    $(this).removeClass('active');
+                } else {
+                    favoris[ticker] = true;
+                    $(this).addClass('active');
+                }
+                localStorage.setItem('quant_favoris', JSON.stringify(favoris));
+            });
+        });
+    </script>
+</body>
+</html>
