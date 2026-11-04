@@ -9,6 +9,20 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <div class="topbar">
+    <h1>Screener Actif : <span style="color: var(--accent);">{{ indice }}</span></h1>
+    
+    <div style="display: flex; align-items: center; gap: 15px;">
+        <!-- Bouton Switch Thème -->
+        <button id="themeToggleBtn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid var(--accent); color: var(--text-light); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: 600;">
+            <i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span>
+        </button>
+
+        <div style="font-size: 0.85em; color: var(--text-muted);" id="progressText">
+            <i class="fa-solid fa-circle-notch fa-spin"></i> Traitement...
+        </div>
+    </div>
+</div>
 <div class="app">
     <nav class="rail" aria-label="Marchés">
         <a class="marque" href="/">Terminal quantitatif</a>
