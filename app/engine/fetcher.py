@@ -1,317 +1,396 @@
 import os
-import sqlite3
-import pickle
-import time
-from datetime import datetime
-import pandas as pd
-import yfinance as yf
 import math
+import json
+import time
+import sqlite3
+import threading
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.engine.math_models import (
-    calculer_cagr, calculer_piotroski, analyser_sentiment_news, 
-    generer_graphique_interactif, generer_graphique_prediction, dossier_graphs
-)
+import numpy as np
+import pandas as pd
+import yfinance as yf
 
-db_cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "cache_bourse_v2.db")
+from app.engine import math_models as mm
 
-PRIMES_RISQUE_PAYS = {
-    "United States": 0.00, "Switzerland": 0.00, "Germany": 0.00, 
-    "France": 0.004, "United Kingdom": 0.005, "Japan": 0.005, "China": 0.012, "India": 0.021
+racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+db_cache_path = os.path.join(racine, "cache_bourse_v3.db")
+VERSION_SCHEMA = 3          # à incrémenter quand la structure des lignes change : invalide le cache
+
+# --------------------------------------------------------------------------- #
+# Hypothèses de valorisation (à réviser régulièrement)
+# --------------------------------------------------------------------------- #
+PRIMES_RISQUE_PAYS = {      # prime ajoutée au coût des fonds propres ; défaut 2 % si pays inconnu
+    "United States": 0.00, "Switzerland": 0.00, "Germany": 0.00,
+    "France": 0.004, "United Kingdom": 0.005, "Japan": 0.005, "China": 0.012, "India": 0.021,
 }
+# Taux sans risque par devise (fraction, ex. {"JPY": 0.012, "EUR": 0.028}). VIDE par défaut : tout est alors
+# actualisé avec le 10 ans américain, ce qui pénalise les marchés à taux bas (Japon, Suisse, zone euro).
+RF_LOCAL = {}
 
+BENCHMARKS = {
+    "SP 500": "^GSPC", "S&P 500": "^GSPC", "NASDAQ 100": "^NDX", "Dow Jones": "^DJI", "TSX 60": "^GSPTSE",
+    "CAC 40": "^FCHI", "DAX 40": "^GDAXI", "Euro Stoxx 50": "^STOXX50E", "FTSE 100": "^FTSE",
+    "Ibex 35": "^IBEX", "FTSE MIB": "FTSEMIB.MI", "AEX Pays-Bas": "^AEX", "BEL 20": "^BFX",
+    "SMI Suisse": "^SSMI", "OMXS30": "^OMX", "Nikkei 225": "^N225", "Hang Seng": "^HSI",
+    "CSI 300": "000300.SS", "ASX 200": "^AXJO", "Nifty 50": "^NSEI", "Bovespa": "^BVSP",
+}
+# Yahoo cote certaines places en sous-unité (pence...) alors que les états financiers sont en unité
+DEVISES_SOUS_UNITE = {"GBp": ("GBP", 0.01), "GBX": ("GBP", 0.01), "ILA": ("ILS", 0.01), "ZAc": ("ZAR", 0.01)}
+
+MACRO_MAP = {
+    "Pétrole WTI": "CL=F", "Gaz Naturel": "NG=F", "Uranium": "URA", "Solaire": "TAN",
+    "Or": "GC=F", "Argent": "SI=F", "Cuivre": "HG=F", "Acier": "SLX", "Aluminium": "JJU",
+    "Blé": "KE=F", "Bois": "CUT", "Taux 10 Ans": "^TNX", "Index Dollar": "DX-Y.NYB",
+    "Fret Maritime": "BDRY", "Aéro & Défense": "ITA", "Semi-conducteurs": "^SOX",
+    "Construction": "ITB", "Biotech": "IBB", "Santé": "XLV", "Banque": "XLF", "Volatilité VIX": "^VIX",
+}
+LIENS_MACRO = [("Gold", "Or"), ("Uranium", "Uranium"), ("Oil", "Pétrole WTI"), ("Aerospace", "Aéro & Défense"),
+               ("Semiconductor", "Semi-conducteurs"), ("Copper", "Cuivre"), ("Steel", "Acier"),
+               ("Solar", "Solaire"), ("Biotechnology", "Biotech"), ("Banks", "Banque")]
+
+# --------------------------------------------------------------------------- #
+# Utilitaires
+# --------------------------------------------------------------------------- #
+_verrou = threading.Lock()
+_ttl = {}
+
+
+def _avec_ttl(cle, ttl, fabrique):
+    """Cache mémoire à durée de vie (évite 21 téléchargements macro à chaque page)."""
+    now = time.time()
+    with _verrou:
+        v = _ttl.get(cle)
+        if v and now - v[0] < ttl:
+            return v[1]
+    valeur = fabrique()
+    with _verrou:
+        _ttl[cle] = (now, valeur)
+    return valeur
+
+
+def _f(x):
+    """float propre ou None (rejette NaN, inf, chaînes comme 'Infinity')."""
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(x) or math.isinf(x) else x
+
+
+def json_safe(o):
+    if isinstance(o, dict):
+        return {k: json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [json_safe(v) for v in o]
+    if isinstance(o, (bool, np.bool_)):
+        return bool(o)
+    if isinstance(o, (int, np.integer)):
+        return int(o)
+    if isinstance(o, (float, np.floating)):
+        return _f(o)
+    return o
+
+
+# --------------------------------------------------------------------------- #
+# Cache SQLite (JSON au lieu de pickle : lisible, sûr, versionné)
+# --------------------------------------------------------------------------- #
 def init_cache_db():
-    conn = sqlite3.connect(db_cache_path)
-    conn.execute('CREATE TABLE IF NOT EXISTS cache_actions (ticker TEXT PRIMARY KEY, date TEXT, data BLOB)')
+    conn = sqlite3.connect(db_cache_path, timeout=30)
+    conn.execute("CREATE TABLE IF NOT EXISTS cache_actions "
+                 "(ticker TEXT, date TEXT, version INTEGER, data TEXT, PRIMARY KEY (ticker, date, version))")
+    conn.execute("DELETE FROM cache_actions WHERE date <= date('now', '-7 days')")
     conn.commit()
     conn.close()
 
+
 def charger_du_cache(ticker, date_str):
     try:
-        conn = sqlite3.connect(db_cache_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT data FROM cache_actions WHERE ticker = ? AND date = ?", (ticker, date_str))
-        row = cursor.fetchone()
+        conn = sqlite3.connect(db_cache_path, timeout=30)
+        row = conn.execute("SELECT data FROM cache_actions WHERE ticker=? AND date=? AND version=?",
+                           (ticker, date_str, VERSION_SCHEMA)).fetchone()
         conn.close()
-        if row: return pickle.loads(row[0])
-    except: pass
-    return None
+        return json.loads(row[0]) if row else None
+    except Exception:
+        return None
+
 
 def sauvegarder_dans_cache(ticker, date_str, data):
     try:
-        conn = sqlite3.connect(db_cache_path)
-        conn.execute('INSERT OR REPLACE INTO cache_actions (ticker, date, data) VALUES (?, ?, ?)', (ticker, date_str, pickle.dumps(data)))
+        conn = sqlite3.connect(db_cache_path, timeout=30)
+        conn.execute("INSERT OR REPLACE INTO cache_actions VALUES (?, ?, ?, ?)",
+                     (ticker, date_str, VERSION_SCHEMA, json.dumps(data)))
         conn.commit()
         conn.close()
-    except: pass
+    except Exception as e:
+        print(f"Cache non écrit pour {ticker} : {e}")
 
-def nettoyer_vieux_cache():
-    try:
-        conn = sqlite3.connect(db_cache_path)
-        conn.execute("DELETE FROM cache_actions WHERE date <= date('now', '-7 days')")
-        conn.commit()
-        conn.close()
-    except: pass
 
 init_cache_db()
 
-def fetch_single_macro(nom, ticker):
+
+# --------------------------------------------------------------------------- #
+# Macro, taux, change, indice de référence
+# --------------------------------------------------------------------------- #
+def _macro_un(nom, symbole):
+    """Niveau, variation 1 mois et z-score : rendement 21 j / (vol quotidienne 3 mois × √21).
+    Le z-score rend comparables un pétrole volatil et un dollar calme ; l'ancien écart à la MM40 en %
+    était comparé à des seuils (« VIX < 18 ») qui n'avaient rien à voir avec son unité."""
+    vide = {"niveau": None, "var_1m": 0.0, "z": 0.0}
     try:
-        df = yf.Ticker(ticker).history(period="3mo")
-        if not df.empty and len(df) > 10:
-            prix = df['Close'].iloc[-1]
-            ma = df['Close'].rolling(40).mean().iloc[-1] if len(df) >= 40 else df['Close'].mean()
-            return nom, ((prix - ma) / ma) * 100
-    except: pass
-    return nom, 0
+        c = yf.Ticker(symbole).history(period="6mo")["Close"].dropna()
+        if len(c) < 30:
+            return nom, vide
+        sig = c.pct_change().dropna().iloc[-63:].std()
+        ret = c.iloc[-1] / c.iloc[-22] - 1
+        z = float(ret / (sig * math.sqrt(21))) if sig and sig > 0 else 0.0
+        return nom, {"niveau": float(c.iloc[-1]), "var_1m": float(ret * 100), "z": max(-4.0, min(4.0, z))}
+    except Exception:
+        return nom, vide
+
 
 def analyser_tendances_macro():
-    macro_map = {
-        "Pétrole WTI": "CL=F", "Gaz Naturel": "NG=F", "Uranium": "URA", "Solaire": "TAN",
-        "Or": "GC=F", "Argent": "SI=F", "Cuivre": "HG=F", "Acier": "SLX", "Aluminium": "JJU",
-        "Blé": "KE=F", "Bois": "CUT", "Taux 10 Ans": "^TNX", "Index Dollar": "DX-Y.NYB", 
-        "Fret Maritime": "BDRY", "Aéro & Défense": "ITA", "Semi-conducteurs": "^SOX", 
-        "Construction": "ITB", "Biotech": "IBB", "Santé": "XLV", "Banque": "XLF", "Volatilité VIX": "^VIX"
-    }
-    tendances = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(fetch_single_macro, nom, tk) for nom, tk in macro_map.items()]
-        for future in as_completed(futures):
-            nom, val = future.result()
-            tendances[nom] = val
-    return tendances
+    def charger():
+        res = {}
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for fut in as_completed([ex.submit(_macro_un, n, s) for n, s in MACRO_MAP.items()]):
+                n, v = fut.result()
+                res[n] = v
+        return res
+    return _avec_ttl("macro", 1800, charger)
+
 
 def obtenir_taux_sans_risque():
-    try:
-        taux_actuel = yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1]
-        return taux_actuel / 100.0 if not pd.isna(taux_actuel) else 0.042
-    except: return 0.042
-
-def analyser_action_complete(ticker_symbol, secteurs_cibles, taux_sans_risque_dynamique, donnees_macro):
-    today_str = datetime.today().strftime('%Y-%m-%d')
-    donnees_cache = charger_du_cache(ticker_symbol, today_str)
-    
-    if donnees_cache is not None:
-        if secteurs_cibles and donnees_cache.get("Secteur") not in secteurs_cibles: return None
-        return donnees_cache
-
-    try:
-        ticker = yf.Ticker(ticker_symbol)
-        info = ticker.info or {}
-        sector = info.get("sector", "N/A")
-        if secteurs_cibles and sector not in secteurs_cibles: return None
-
-        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
-        if current_price == 0:
-            hist = ticker.history(period="5d")
-            current_price = hist['Close'].iloc[-1] if not hist.empty else 0
-
-        market_cap = info.get("marketCap", 0) or 0
-        total_cash = info.get("totalCash", 0) or 0
-        total_debt = info.get("totalDebt", 0) or 0
-        net_debt = total_debt - total_cash
-        ebitda = info.get("ebitda", 0) or 0
-        fcf = info.get("freeCashflow", 0) or 0
-        total_revenue = info.get("totalRevenue", 0) or 0
-        operating_margins = info.get("operatingMargins", 0) or 0
-        trailing_pe = info.get("trailingPE", 0) or 0
-        dividend_yield = (info.get("dividendYield", 0) or 0) * 100
-        beta = info.get("beta", 1.0) or 1.0
-        current_ratio = info.get("currentRatio", 0) or 0
-        roe = (info.get("returnOnEquity", 0) or 0) * 100
-        book_value = info.get("bookValue", 0) or 0
-        eps = info.get("trailingEps", 0) or 0
-
+    def charger():
         try:
-            fin = ticker.financials
-            cf_stmt = ticker.cashflow
-            bs = ticker.balance_sheet
-        except: fin, cf_stmt, bs = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        
-        cagr_rev_3y, cagr_fcf_3y = None, None
-        if not fin.empty and 'Total Revenue' in fin.index:
-            rev_s = fin.loc['Total Revenue'].dropna()
-            if len(rev_s) >= 4: cagr_rev_3y = calculer_cagr(rev_s.iloc[3], rev_s.iloc[0], 3)
+            niveau = yf.Ticker("^TNX").history(period="5d")["Close"].dropna().iloc[-1]
+            t = float(niveau) / 100.0
+            return t / 10 if t > 0.25 else t         # ancien format Yahoo : taux × 10
+        except Exception:
+            return 0.042
+    return _avec_ttl("rf", 1800, charger)
 
-        if not cf_stmt.empty and ('Free Cash Flow' in cf_stmt.index or 'Operating Cash Flow' in cf_stmt.index):
-            fcf_ligne = 'Free Cash Flow' if 'Free Cash Flow' in cf_stmt.index else 'Operating Cash Flow'
-            fcf_s = cf_stmt.loc[fcf_ligne].dropna()
-            if len(fcf_s) >= 4: cagr_fcf_3y = calculer_cagr(fcf_s.iloc[3], fcf_s.iloc[0], 3)
 
-        devise_native = info.get("currency", "USD")
-        
-        rsi, ma50, ma200 = 50, 0, 0
+def taux_change(de, vers):
+    if de == vers:
+        return 1.0
+
+    def charger():
         try:
-            df_hist = ticker.history(period="1y")
-            if not df_hist.empty and len(df_hist) > 200:
-                close_prices = df_hist['Close']
-                ma50 = close_prices.rolling(50).mean().iloc[-1]
-                ma200 = close_prices.rolling(200).mean().iloc[-1]
-                delta = close_prices.diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi_series = 100 - (100 / (1 + rs))
-                if not rsi_series.empty and not pd.isna(rsi_series.iloc[-1]): rsi = rsi_series.iloc[-1]
-        except: pass
+            c = yf.Ticker(f"{de}{vers}=X").history(period="5d")["Close"].dropna()
+            return float(c.iloc[-1]) if len(c) else None
+        except Exception:
+            return None
+    return _avec_ttl(("fx", de, vers), 6 * 3600, charger)
 
-        piotroski_score, piotroski_complet = calculer_piotroski(ticker)
-        
-        ebit = info.get("ebit") or info.get("operatingIncome") or (operating_margins * total_revenue)
-        taux_imposition = 0.23 if sector != "Financial Services" else 0.15
-        nopat = ebit * (1 - taux_imposition)
-        
-        shares = info.get("sharesOutstanding", 0) or 0
-        total_equity = book_value * shares if book_value > 0 else (market_cap if market_cap > 0 else 1)
-        capital_investi = total_debt + total_equity - total_cash
-        if capital_investi <= 0: capital_investi = total_revenue * 0.3 if total_revenue > 0 else 1.0
 
-        roic = (nopat / capital_investi) * 100 if capital_investi > 0 else 0.0
-        
-        prime_risque_marche = 0.055
-        interest_expense = 0
-        if not fin.empty and 'Interest Expense' in fin.index:
-            try: interest_expense = abs(fin.loc['Interest Expense'].dropna().iloc[0])
-            except: pass
-                
-        if total_debt > 0 and interest_expense > 0:
-            cout_dette = max(0.02, min(0.15, interest_expense / total_debt))
-        else:
-            debt_ebitda = net_debt / ebitda if ebitda > 0 else 5.0
-            prime_risque_dette = 0.015 if debt_ebitda < 1.5 else (0.035 if debt_ebitda < 3.0 else 0.07)
-            cout_dette = taux_sans_risque_dynamique + prime_risque_dette
-        
-        pays_origine = info.get("country", "United States")
-        prime_pays = PRIMES_RISQUE_PAYS.get(pays_origine, 0.02)
-        cost_of_equity = max(0.065, taux_sans_risque_dynamique + (max(0.3, min(2.5, beta)) * prime_risque_marche) + prime_pays)
-        
-        valeur_totale = market_cap + total_debt
-        poids_eq = market_cap / valeur_totale if valeur_totale > 0 else 1.0
-        poids_dt = total_debt / valeur_totale if valeur_totale > 0 else 0.0
-        wacc = (poids_eq * cost_of_equity) + (poids_dt * cout_dette * (1 - taux_imposition))
-        wacc_pourcentage = wacc * 100
-        spread = roic - wacc_pourcentage
+def obtenir_benchmark(indice):
+    symbole = BENCHMARKS.get(indice)
+    if not symbole:
+        return None
 
-        ev = market_cap + net_debt
-        ev_ebitda = ev / ebitda if ebitda > 0 else 0.0
-        fcf_yield = (fcf / market_cap) * 100 if market_cap > 0 else 0.0
-        debt_to_equity = (total_debt / total_equity) * 100 if total_equity > 0 else "N/A"
-        debt_ebitda = net_debt / ebitda if ebitda > 0 and sector != "Financial Services" else 0.0
+    def charger():
+        try:
+            c = yf.Ticker(symbole).history(period="2y")["Close"].dropna()
+            return c if len(c) > 100 else None
+        except Exception:
+            return None
+    return _avec_ttl(("bench", symbole), 3600, charger)
 
-        z_score = "N/A"
-        if not bs.empty and sector not in ["Financial Services", "Real Estate"]:
+
+def etiquette_macro(industrie, macro):
+    for motif, cle in LIENS_MACRO:
+        if motif.lower() in (industrie or "").lower():
+            z = (macro.get(cle) or {}).get("z", 0.0)
+            return f"{cle} {'▲' if z >= 1 else ('▼' if z <= -1 else '▬')}"
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Analyse d'une action : métriques BRUTES uniquement (le scoring relatif est fait ensuite, sur l'ensemble)
+# --------------------------------------------------------------------------- #
+def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None):
+    today = datetime.today().strftime("%Y-%m-%d")
+    cache = charger_du_cache(ticker_symbol, today)
+    if cache is not None:
+        if secteurs_cibles and cache.get("secteur") not in secteurs_cibles:
+            return None
+        return cache
+
+    try:
+        t = yf.Ticker(ticker_symbol)
+        info = t.info or {}
+        secteur = info.get("sector") or "N/A"
+        if secteurs_cibles and secteur not in secteurs_cibles:
+            return None
+        est_fin = secteur == "Financial Services"
+        alertes = []
+
+        # ---- devises : cote (pence → livres), états financiers, conversion ----
+        devise_brute = info.get("currency") or "USD"
+        devise, f_prix = DEVISES_SOUS_UNITE.get(devise_brute, (devise_brute, 1.0))
+        dev_fin = info.get("financialCurrency") or devise
+        dev_fin = DEVISES_SOUS_UNITE.get(dev_fin, (dev_fin, 1.0))[0]
+        fx = taux_change(dev_fin, devise)
+        fx_ok = fx is not None
+        k = fx if fx_ok else 1.0
+        if not fx_ok:
+            alertes.append(f"Taux de change {dev_fin}→{devise} indisponible : valorisation non calculée")
+        elif dev_fin != devise:
+            alertes.append(f"États financiers en {dev_fin}, cours en {devise} : convertis au taux du jour")
+
+        def m(x):
+            x = _f(x)
+            return None if x is None else x * k
+
+        # ---- cours et historique ----
+        try:
+            hist = t.history(period="2y")
+            close = (hist["Close"] * f_prix).dropna()
+        except Exception:
+            close = None
+        brut = _f(info.get("currentPrice")) or _f(info.get("regularMarketPrice"))
+        prix = brut * f_prix if brut else (float(close.iloc[-1]) if close is not None and len(close) else None)
+        if not prix or prix <= 0:
+            return None
+        rf = RF_LOCAL.get(devise, rf_us)
+        mk = mm.metriques_marche(close, rf, bench)
+        if mk["prix"] is None:
+            alertes.append("Historique de cours insuffisant (< 60 séances)")
+
+        # ---- données de base ----
+        actions = _f(info.get("sharesOutstanding")) or _f(info.get("impliedSharesOutstanding"))
+        cap = _f(info.get("marketCap"))
+        if actions and (f_prix != 1.0 or not cap):
+            cap = prix * actions
+        cash, dette = m(info.get("totalCash")), m(info.get("totalDebt"))
+        cash0, dette0 = cash or 0.0, dette or 0.0
+        ebitda, ca = m(info.get("ebitda")), m(info.get("totalRevenue"))
+        fcf_ttm, eps, bvps = m(info.get("freeCashflow")), m(info.get("trailingEps")), m(info.get("bookValue"))
+        roe, roa = _f(info.get("returnOnEquity")), _f(info.get("returnOnAssets"))
+        marge_op = _f(info.get("operatingMargins"))
+
+        def etat(attr):
             try:
-                total_assets = bs.loc['Total Assets'].iloc[0] if 'Total Assets' in bs.index else 0
-                total_liab = bs.loc['Total Liabilities Net Minority Interest'].iloc[0] if 'Total Liabilities Net Minority Interest' in bs.index else (bs.loc['Total Liabilities'].iloc[0] if 'Total Liabilities' in bs.index else 0)
-                current_assets = bs.loc['Current Assets'].iloc[0] if 'Current Assets' in bs.index else 0
-                current_liab = bs.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in bs.index else 0
-                retained_earnings = bs.loc['Retained Earnings'].iloc[0] if 'Retained Earnings' in bs.index else 0
-                
-                if total_assets > 0:
-                    a = (current_assets - current_liab) / total_assets
-                    b = retained_earnings / total_assets
-                    c = ebit / total_assets
-                    d = market_cap / total_liab if total_liab > 0 else 0
-                    e = total_revenue / total_assets
-                    z_score = round((1.2 * a) + (1.4 * b) + (3.3 * c) + (0.6 * d) + (1.0 * e), 2)
-            except: pass
+                return getattr(t, attr)
+            except Exception:
+                return pd.DataFrame()
+        fin, bs, cf = etat("financials"), etat("balance_sheet"), etat("cashflow")
 
-        valeur_intrinseque, marge_securite = 0.0, 0.0
-        if fcf > 0 and cost_of_equity > 0.025 and shares > 0:
-            try:
-                croissance_ct = min(max(cagr_fcf_3y if cagr_fcf_3y is not None else 0.05, 0.02), 0.15) 
-                flux_futurs = [(fcf * (1 + croissance_ct)**i) / ((1 + cost_of_equity)**i) for i in range(1, 6)]
-                fcf_projete = fcf * (1 + croissance_ct)**5
-                valeur_terminale = (fcf_projete * 1.025) / (cost_of_equity - 0.025)
-                valeur_intrinseque = (sum(flux_futurs) + (valeur_terminale / ((1 + cost_of_equity)**5))) / shares
-                if current_price > 0 and valeur_intrinseque > 0:
-                    marge_securite = ((valeur_intrinseque - current_price) / valeur_intrinseque) * 100
-            except: pass
+        ebit = m(mm.val(mm.ligne(fin, "EBIT", "Operating Income"), 0))
+        if ebit is None and marge_op is not None and ca:
+            ebit = marge_op * ca
+        fonds_propres = m(mm.val(mm.ligne(bs, "Common Stock Equity", "Stockholders Equity"), 0))
+        if fonds_propres is None and bvps and actions:
+            fonds_propres = bvps * actions
+        interets = mm.val(mm.ligne(fin, "Interest Expense", "Interest Expense Non Operating"), 0)
+        interets = None if interets is None else abs(interets) * k
+        taux_is = mm.taux_effectif(fin)
 
-        valeur_graham, potentiel_graham = 0, 0
-        if eps > 0 and book_value > 0 and sector not in ["Financial Services", "Technology"]:
-            try:
-                valeur_graham = math.sqrt(22.5 * eps * book_value)
-                if current_price > 0: potentiel_graham = ((valeur_graham - current_price) / current_price) * 100
-            except: pass
+        # ---- solidité ----
+        nd_ebitda = ((dette0 - cash0) / ebitda) if (ebitda and ebitda > 0 and not est_fin) else None
+        de = (dette0 / fonds_propres * 100) if (fonds_propres and fonds_propres > 0) else None
+        pio, pio_n = mm.calculer_piotroski(fin, bs, cf)
+        altman, zone = None, None
+        if not est_fin and secteur != "Real Estate":
+            tl = m(mm.val(mm.ligne(bs, "Total Liabilities Net Minority Interest", "Total Liabilities"), 0))
+            ta = m(mm.val(mm.ligne(bs, "Total Assets"), 0))
+            ac, pc = m(mm.val(mm.ligne(bs, "Current Assets"), 0)), m(mm.val(mm.ligne(bs, "Current Liabilities"), 0))
+            res_ = m(mm.val(mm.ligne(bs, "Retained Earnings"), 0))
+            fr = (ac - pc) if ac is not None and pc is not None else None
+            altman, zone = mm.calculer_altman(secteur, ta, tl, fr, res_, ebit, cap, fonds_propres, ca)
 
-        s_valo, s_qualite, s_risque, s_croissance, s_momentum = 50, 50, 50, 50, 50
+        # ---- croissance ----
+        cagr_ca = mm.cagr_serie(mm.ligne(fin, "Total Revenue"))
+        fcf_l = mm.ligne(cf, "Free Cash Flow")
+        if not fcf_l:
+            cfo_l, capex_l = mm.ligne(cf, "Operating Cash Flow"), mm.ligne(cf, "Capital Expenditure")
+            fcf_l = [(a + b) if a is not None and b is not None else None for a, b in zip(cfo_l, capex_l)]
+        cagr_fcf = mm.cagr_serie(fcf_l)
+        fcf_hist = [m(x) for x in fcf_l[:3] if x is not None]
+        fcf_base = float(np.mean(fcf_hist)) if len(fcf_hist) >= 2 else fcf_ttm    # FCF normalisé sur 3 ans
 
-        if sector == "Financial Services":
-            price_to_book = info.get("priceToBook", 0) or 0
-            if 0 < trailing_pe < 10: s_valo += 30
-            elif trailing_pe > 16: s_valo -= 25
-            if roe > 12: s_qualite += 35
-            elif roe < 5: s_qualite -= 25
-            s_risque = 65
-        else:
-            if fcf_yield > 6.0: s_valo += 35
-            elif fcf_yield < 0: s_valo -= 30
-            if 0 < trailing_pe < 18: s_valo += 30
-            elif trailing_pe > 28: s_valo -= 30
-            if marge_securite > 20: s_valo += 15
-            elif marge_securite < -20: s_valo -= 15
-            if spread > 6.0: s_qualite += 30
-            elif spread < 0: s_qualite -= 20
-            if piotroski_complet and piotroski_score >= 6: s_qualite += 25
-            elif piotroski_score <= 3: s_qualite -= 20
-            if 0 < debt_ebitda < 2.0: s_risque += 35
-            elif debt_ebitda > 3.5: s_risque -= 35
+        # ---- coût du capital, rentabilité ----
+        beta = mk["beta"] if mk["beta"] is not None else (_f(info.get("beta")) or 1.0)
+        prime_pays = PRIMES_RISQUE_PAYS.get(info.get("country", "United States"), 0.02)
+        ke = mm.calculer_cout_capitaux(rf, beta, prime_pays)
+        kd = mm.calculer_cout_dette(rf, interets, dette0, nd_ebitda)
+        wacc = mm.calculer_wacc(ke, kd, taux_is, cap, dette0) * 100 if cap else None
+        roic = None if est_fin else mm.calculer_roic(ebit, taux_is, fonds_propres, dette0, cash0)
+        spread = (roic - wacc) if (roic is not None and wacc is not None) else None
 
-        if cagr_rev_3y is not None:
-            if cagr_rev_3y > 0.08: s_croissance += 35
-            elif cagr_rev_3y < 0: s_croissance -= 25
+        # ---- multiples ----
+        ev = (cap + dette0 - cash0) if (cap and not est_fin) else None
+        per = _f(info.get("trailingPE"))
+        per = per if per and per > 0 else None
+        ev_ebitda = ev / ebitda if (ev and ev > 0 and ebitda and ebitda > 0) else None
+        ebitda_yield = ebitda / ev * 100 if (ev and ev > 0 and ebitda is not None and not est_fin) else None
+        fcf_yield = fcf_ttm / cap * 100 if (cap and fcf_ttm is not None and not est_fin and fx_ok) else None
+        earn_yield = (eps / prix * 100) if (eps is not None and fx_ok) else (100 / per if per else None)
+        div = _f(info.get("trailingAnnualDividendYield"))      # fraction stable (dividendYield a changé d'unité)
+        div_yield = div * 100 if div is not None else None
 
-        if current_price > ma50: s_momentum += 25
-        if current_price > ma200: s_momentum += 25
+        # ---- valeur intrinsèque ----
+        g_term = min(0.025, max(0.01, rf - 0.005))
+        valo = {"bear": None, "base": None, "bull": None}
+        g1 = part_vt = g_imp = None
+        methode = None
+        if fx_ok:
+            if est_fin:
+                valo = mm.valorisation_financiere(roe, bvps, ke, g_term, prix)
+                methode = "P/B justifié"
+            elif fcf_base and fcf_base > 0 and actions:
+                r = mm.valorisation_dcf(fcf_base, actions, cagr_ca, cagr_fcf, ke, g_term, prix)
+                valo = {n: r[n] for n in ("bear", "base", "bull")}
+                g1, part_vt, g_imp = r["g1"], r["part_vt"], r["g_implicite"]
+                methode = "DCF"
+            elif not est_fin:
+                alertes.append("FCF négatif ou indisponible : pas de DCF")
+        if valo["base"] is not None and not (0.05 <= valo["base"] / prix <= 20):
+            alertes.append("Valorisation incohérente avec le cours (devise ou unités ?) : ignorée")
+            valo, g1, part_vt, g_imp = {"bear": None, "base": None, "bull": None}, None, None, None
+        graham = None if (est_fin or secteur == "Technology" or not fx_ok) else mm.valeur_graham(eps, bvps)
+        if graham is not None and not (0.1 <= graham / prix <= 10):
+            graham = None
+        if part_vt is not None and part_vt > 0.75:
+            alertes.append(f"Valeur terminale = {part_vt * 100:.0f} % du DCF : résultat très sensible aux hypothèses")
+        if g_imp is not None and g1 is not None and g_imp > g1 + 0.05:
+            alertes.append("Le cours intègre une croissance nettement supérieure à celle retenue")
 
-        s_valo = max(0, min(100, s_valo))
-        if s_valo <= 35 or marge_securite < -25: s_qualite = min(s_qualite, 60)
-
-        bonus_macro = 0
-        details_macro = "Neutre ⚪"
-        industry = info.get("industry", "")
-
-        if donnees_macro:
-            if "Gold" in industry: bonus_macro = donnees_macro.get("Or", 0) * 1.5; details_macro = "Or 📈"
-            elif "Aerospace" in industry: bonus_macro = donnees_macro.get("Aéro & Défense", 0) * 1.5; details_macro = "Aéronautique 🚀"
-            elif "Semiconductors" in industry: bonus_macro = donnees_macro.get("Semi-conducteurs", 0) * 1.5; details_macro = "Puces 💻"
-
-        bonus_macro = max(-25, min(25, int(bonus_macro)))
-        s_momentum = max(0, min(100, s_momentum + bonus_macro))
-        s_croissance = max(0, min(100, s_croissance + (bonus_macro / 2)))
-
-        score_combine = int((s_valo * 0.35) + (s_qualite * 0.25) + (s_croissance * 0.15) + (s_momentum * 0.15) + (s_risque * 0.10))
-
-        recommandation = "CONSERVER"
-        if score_combine >= 75 and spread >= 2 and s_risque >= 45 and s_valo >= 40: recommandation = "ACHAT FORT"
-        elif score_combine >= 63 and spread >= 0 and s_risque >= 35: recommandation = "ACHAT"
-        elif score_combine <= 42 or s_risque <= 25: recommandation = "VENTE"
-        elif s_valo <= 25 and score_combine >= 60: recommandation = "CONSERVER (Trop chère)"
-
-        graph_path = generer_graphique_interactif(ticker_symbol)
-
-        resultat_dict = {
-            "Ticker": ticker_symbol, "Nom": info.get("shortName", ticker_symbol), "Secteur": sector,
-            "Summary": info.get("longBusinessSummary", "Aucune description."), "Yahoo_URL": f"https://finance.yahoo.com/quote/{ticker_symbol}/profile",
-            "Devise Origine": devise_native, "Prix (Local)": round(current_price, 2) if current_price > 0 else "N/A",
-            "Score /100": int(score_combine), "Valo /100": int(s_valo), "Qual /100": int(s_qualite),
-            "Crois /100": int(s_croissance), "Risq /100": int(s_risque), "Mom /100": int(s_momentum),
-            "Signal": recommandation, "ROIC (%)": round(roic, 1) if roic != 0 else "N/A",
-            "Marge Opé (%)": round(operating_margins * 100, 1) if operating_margins != 0 else "N/A",
-            "D/E (%)": round(debt_to_equity, 1) if isinstance(debt_to_equity, float) else "N/A",
-            "Z-Score": z_score, "WACC (%)": round(wacc_pourcentage, 1) if wacc_pourcentage != 0 else "N/A",
-            "Spread (%)": round(spread, 1) if spread != 0 else "N/A", "FCF Yield (%)": round(fcf_yield, 1) if fcf_yield != 0 else "N/A",
-            "PER": round(trailing_pe, 1) if trailing_pe > 0 else "N/A", "EV/EBITDA": round(ev_ebitda, 1) if ev_ebitda > 0 else "N/A",
-            "Piotroski": f"{piotroski_score}/9", "CAGR CA 3y (%)": round(cagr_rev_3y * 100, 1) if cagr_rev_3y is not None else "N/A",
-            "CAGR FCF 3y (%)": round(cagr_fcf_3y * 100, 1) if cagr_fcf_3y is not None else "N/A",
-            "Div Yield (%)": round(dividend_yield, 2) if dividend_yield > 0 else "N/A",
-            "Valeur DCF": round(valeur_intrinseque, 2) if valeur_intrinseque > 0 else "N/A",
-            "Marge Séc. (%)": round(marge_securite, 1) if valeur_intrinseque > 0 else "N/A",
-            "Initiés": "Neutre ⚪", "Macro": details_macro, "Mise à jour": today_str, "Graph_URL": graph_path if graph_path else ""
+        row = {
+            "ticker": ticker_symbol, "nom": info.get("shortName") or ticker_symbol, "secteur": secteur,
+            "industrie": info.get("industry") or "", "est_fin": est_fin, "devise": devise, "prix": prix,
+            "resume": (info.get("longBusinessSummary") or "Aucune description.")[:700],
+            "url": f"https://finance.yahoo.com/quote/{ticker_symbol}/profile", "maj": datetime.today().strftime("%d/%m/%Y"),
+            # valorisation
+            "per": per, "ev_ebitda": ev_ebitda, "ebitda_yield": ebitda_yield, "fcf_yield": fcf_yield,
+            "earn_yield": earn_yield, "div_yield": div_yield,
+            # rentabilité
+            "roic": roic, "wacc": wacc, "spread": spread, "marge_op": marge_op * 100 if marge_op is not None else None,
+            "roe": roe * 100 if roe is not None else None, "roa": roa * 100 if roa is not None else None, "ke": ke * 100,
+            # solidité
+            "nd_ebitda": nd_ebitda, "de": de, "altman": altman, "altman_zone": zone,
+            "piotroski": pio if pio_n else None, "piotroski_n": pio_n,
+            # croissance
+            "cagr_ca": cagr_ca * 100 if cagr_ca is not None else None,
+            "cagr_fcf": cagr_fcf * 100 if cagr_fcf is not None else None,
+            # marché / risque
+            "vol": mk["vol"], "mdd": mk["mdd"], "rdt_1a": mk["rdt_1a"], "sharpe": mk["sharpe"], "sortino": mk["sortino"],
+            "beta": beta if (mk["beta"] is not None or info.get("beta")) else None,
+            "beta_local": mk["beta"] is not None, "mom_12_1": mk["mom_12_1"],
+            "dist_ma200": mk["dist_ma200"], "dist_52w": mk["dist_52w"], "rsi": mk["rsi"],
+            # valeur intrinsèque
+            "methode_valo": methode, "valo_bear": valo["bear"], "valo_base": valo["base"], "valo_bull": valo["bull"],
+            "marge_secu": mm.marge_securite(valo["base"], prix),
+            "g_retenue": g1 * 100 if g1 is not None else None,
+            "g_implicite": g_imp * 100 if g_imp is not None else None,
+            "part_vt": part_vt * 100 if part_vt is not None else None,
+            "graham": graham, "pot_graham": ((graham / prix - 1) * 100) if graham else None,
+            "macro": etiquette_macro(info.get("industry"), donnees_macro or {}), "alertes": alertes,
         }
-        sauvegarder_dans_cache(ticker_symbol, today_str, resultat_dict)
-        return resultat_dict
+        row = json_safe(row)
+        sauvegarder_dans_cache(ticker_symbol, today, row)
+        return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")
         return None

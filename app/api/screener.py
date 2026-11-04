@@ -1,16 +1,34 @@
-from fastapi import APIRouter, Request, Query
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
-from fastapi.templating import Jinja2Templates
+import os
+import re
 import json
 import asyncio
-import os
-import pandas as pd
 
-from app.engine.fetcher import analyser_action_complete, analyser_tendances_macro, obtenir_taux_sans_risque
-from app.engine.math_models import dossier_graphs
+import pandas as pd
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.templating import Jinja2Templates
+
+from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro, obtenir_taux_sans_risque,
+                                obtenir_benchmark, json_safe)
+from app.engine.scoring import calculer_scores
+from app.engine.graphiques import generer_graphique
+from app.engine.sentiment import analyser_actualites
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+SANS_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+CONCURRENCE = 6                      # téléchargements simultanés (au-delà, Yahoo limite le débit)
+RE_TICKER = re.compile(r"^[A-Za-z0-9.\-&^=]{1,20}$")
+
+SECTEURS = ["Technology", "Healthcare", "Financial Services", "Consumer Cyclical", "Consumer Defensive",
+            "Industrials", "Energy", "Basic Materials", "Utilities", "Real Estate", "Communication Services"]
+
+REGIONS = {
+    "Amérique du Nord": ["SP 500", "NASDAQ 100", "Dow Jones", "TSX 60"],
+    "Europe": ["CAC 40", "DAX 40", "Euro Stoxx 50", "FTSE 100", "Ibex 35", "FTSE MIB", "AEX Pays-Bas",
+               "BEL 20", "SMI Suisse", "OMXS30"],
+    "Asie et marchés émergents": ["Nikkei 225", "Hang Seng", "CSI 300", "ASX 200", "Nifty 50", "Bovespa"],
+}
 
 TICKERS_PAR_INDICE = {
     "CAC 40": ["AC.PA", "AI.PA", "AIR.PA", "MT.PA", "CS.PA", "BNP.PA", "EN.PA", "BVI.PA", "CAP.PA", "CA.PA", "ACA.PA", "BN.PA", "DSY.PA", "FGA.PA", "ENGI.PA", "EL.PA", "ERF.PA", "ENX.PA", "RMS.PA", "KER.PA", "OR.PA", "LR.PA", "MC.PA", "ML.PA", "ORA.PA", "RI.PA", "PUB.PA", "RNO.PA", "SAF.PA", "SGO.PA", "SAN.PA", "SU.PA", "GLE.PA", "STLAM.PA", "STMPA.PA", "HO.PA", "TTE.PA", "URW.PA", "VIE.PA", "DG.PA"],
@@ -35,90 +53,188 @@ TICKERS_PAR_INDICE = {
 }
 
 def obtenir_tickers_pour_indice(indice: str):
-    if indice == "SP 500" or indice == "S&P 500":
+    if indice in ("SP 500", "S&P 500"):
         try:
             url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
-            df_tickers = pd.read_csv(url)
-            tickers = df_tickers['Symbol'].dropna().astype(str).tolist()
+            tickers = pd.read_csv(url)["Symbol"].dropna().astype(str).tolist()
             return [t.replace(".", "-") for t in tickers]
         except Exception as e:
             print(f"Erreur chargement S&P 500: {e}")
-            return [
-                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JNJ", 
-                "JPM", "V", "PG", "MA", "HD", "CVX", "ABBV", "LLY", "MRK", "PEP", "COST", "PFE", 
-                "KO", "TMO", "AVGO", "MCD", "WMT", "CRM", "CSCO", "ABT", "BAC", "ACN", "LIN"
-            ]
-    elif indice in TICKERS_PAR_INDICE:
-        return TICKERS_PAR_INDICE[indice]
-    else:
-        return ["MC.PA", "TTE.PA", "AI.PA"]
+            return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JNJ", "JPM", "V",
+                    "PG", "MA", "HD", "CVX", "ABBV", "LLY", "MRK", "PEP", "COST", "PFE", "KO", "TMO", "AVGO",
+                    "MCD", "WMT", "CRM", "CSCO", "ABT", "BAC", "ACN", "LIN"]
+    return TICKERS_PAR_INDICE.get(indice, ["MC.PA", "TTE.PA", "AI.PA"])
 
-def analyser_recommandations_tous_indices(donnees_macro):
-    vix = donnees_macro.get("Volatilité VIX", 0)
-    tnx = donnees_macro.get("Taux 10 Ans", 0)
-    petrole = donnees_macro.get("Pétrole WTI", 0)
-    or_val = donnees_macro.get("Or", 0)
-    cuivre = donnees_macro.get("Cuivre", 0)
-    semi = donnees_macro.get("Semi-conducteurs", 0)
-    dollar = donnees_macro.get("Index Dollar", 0)
 
-    recoms = {}
-    
-    recoms["SP 500"] = {"badge": "🔥 TOP SCAN" if vix < 18 else "⚪ NEUTRE", "style": "badge-top" if vix < 18 else "badge-neutral", "conseil": "Marché global US stable. Idéal pour un scan large sur les grands leaders mondiaux."}
-    recoms["NASDAQ 100"] = {"badge": "⚡ OPPORTUNITÉ TECH" if (vix > 20 or tnx < -0.5) else "🟢 FAVORABLE", "style": "badge-opp" if (vix > 20 or tnx < -0.5) else "badge-fav", "conseil": "Tension/Repli sur les taux : opportunité de dénicher des pépites de croissance à prix réduit."}
-    recoms["Dow Jones"] = {"badge": "🟢 VALUE SOLIDE" if tnx > 0.5 else "⚪ NEUTRE", "style": "badge-fav" if tnx > 0.5 else "badge-neutral", "conseil": "Taux soutenus : environnement idéal pour les conglomérats industriels et financières US."}
-    recoms["TSX 60"] = {"badge": "🔥 BOOM MATIÈRES" if (petrole > 1.5 or or_val > 1.5) else "⚪ NEUTRE", "style": "badge-top" if (petrole > 1.5 or or_val > 1.5) else "badge-neutral", "conseil": "Énergie et métaux précieux au vert : très forte génération de Free Cash Flow au Canada."}
+# =========================================================================
+# CONTEXTE MACRO
+# Les seuils portent sur le z-score à 1 mois (rendement / volatilité attendue) et, pour le VIX et les
+# taux, sur le NIVEAU. Ce sont des repères narratifs (aucun backtest) : ils n'entrent PAS dans le score.
+# =========================================================================
+def _z(m, nom):
+    return (m.get(nom) or {}).get("z") or 0.0
 
-    recoms["CAC 40"] = {"badge": "🟢 BANQUES & LUXE" if tnx > 0 else "⚪ NEUTRE", "style": "badge-fav" if tnx > 0 else "badge-neutral", "conseil": "Bon niveau de spreads banques/assurance et résilience des grandes capitalisations françaises."}
-    recoms["DAX 40"] = {"badge": "🔥 EXPORT DYNAMIQUE" if (dollar > 1.0 or cuivre > 1.0) else "⚪ NEUTRE", "style": "badge-top" if (dollar > 1.0 or cuivre > 1.0) else "badge-neutral", "conseil": "Dollar fort et demande industrielle soutenue : catalyseur positif pour l'export allemand."}
-    recoms["Euro Stoxx 50"] = {"badge": "🟢 ÉQUILIBRE EU", "style": "badge-fav", "conseil": "Excellente diversification européenne sur les 50 champions du continent."}
-    recoms["FTSE 100"] = {"badge": "🔥 RENDEMENT DIV" if (petrole > 1.0 or or_val > 1.0) else "⚪ NEUTRE", "style": "badge-top" if (petrole > 1.0 or or_val > 1.0) else "badge-neutral", "conseil": "Sur-représentation de l'énergie et des mines : rendements en dividende très généreux."}
-    recoms["Ibex 35"] = {"badge": "🟢 MARGE BANCAIRE" if tnx > 0.5 else "⚪ NEUTRE", "style": "badge-fav" if tnx > 0.5 else "badge-neutral", "conseil": "Secteur bancaire espagnol très réactif aux taux d'intérêt."}
-    recoms["FTSE MIB"] = {"badge": "🔥 SECTEUR BANQUE" if tnx > 0.8 else "⚪ NEUTRE", "style": "badge-top" if tnx > 0.8 else "badge-neutral", "conseil": "Forte rentabilité des banques italiennes portée par les taux obligataires."}
-    recoms["AEX Pays-Bas"] = {"badge": "⚡ SEMI-CONDUCTEURS" if semi > 1.0 else "🟢 FAVORABLE", "style": "badge-opp" if semi > 1.0 else "badge-fav", "conseil": "Indice porté par les géants mondiaux des puces électroniques (ASML)."}
-    recoms["BEL 20"] = {"badge": "🛡️ REFUGE PHARMA" if vix > 18 else "⚪ NEUTRE", "style": "badge-safe" if vix > 18 else "badge-neutral", "conseil": "Profil défensif (santé/holdings), idéal si la nervosité monte sur les marchés."}
-    recoms["SMI Suisse"] = {"badge": "🛡️ REFUGE ABSOLU" if vix > 20 else "🟢 HAUTE QUALITÉ", "style": "badge-safe" if vix > 20 else "badge-fav", "conseil": "Les plus beaux bilans d'Europe (Roche, Nestlé, Novartis). Stabilité maximale."}
-    recoms["OMXS30"] = {"badge": "🟢 INGÉNIERIE NORD", "style": "badge-fav", "conseil": "Excellente efficacité opérationnelle et ROI élevé sur l'industrie scandinave."}
 
-    recoms["Nikkei 225"] = {"badge": "🔥 YEN FAIBLE / EXPORT" if dollar > 1.0 else "🟢 FAVORABLE", "style": "badge-top" if dollar > 1.0 else "badge-fav", "conseil": "Gouvernance d'entreprise améliorée et dynamisme des exportateurs japonais."}
-    recoms["Hang Seng"] = {"badge": "⚡ DÉCOOTE EXTRÊME" if vix < 20 else "⚠️ VOLATILITÉ", "style": "badge-opp" if vix < 20 else "badge-warn", "conseil": "Multiples de valorisation (PER) extrêmement bas sur les géants tech chinois."}
-    recoms["CSI 300"] = {"badge": "⚡ OPPORTUNITÉ RELANCE" if cuivre > 0 else "⚪ NEUTRE", "style": "badge-opp" if cuivre > 0 else "badge-neutral", "conseil": "Marché intérieur chinois à fort potentiel de rebond comptable."}
-    recoms["ASX 200"] = {"badge": "🔥 MINES & FER" if (or_val > 0.5 or cuivre > 0.5) else "🟢 FAVORABLE", "style": "badge-top" if (or_val > 0.5 or cuivre > 0.5) else "badge-fav", "conseil": "Secteur minier australien ultra-rentable avec marges brutales."}
-    recoms["Nifty 50"] = {"badge": "🚀 MEGA-CROISSANCE", "style": "badge-top", "conseil": "Expansion économique indienne la plus rapide des grandes puissances."}
-    recoms["Bovespa"] = {"badge": "🔥 COMMODITIES" if petrole > 1.0 else "⚪ NEUTRE", "style": "badge-top" if petrole > 1.0 else "badge-neutral", "conseil": "Valorisations très bon marché sur les géants brésiliens des matières premières."}
-    return recoms
+def _niveau(m, nom, defaut):
+    v = (m.get(nom) or {}).get("niveau")
+    return defaut if v is None else v
 
+
+def _reco(badge, style, conseil):
+    return {"badge": badge, "style": style, "conseil": conseil}
+
+
+def analyser_recommandations_tous_indices(m):
+    vix, tnx = _niveau(m, "Volatilité VIX", 18.0), _niveau(m, "Taux 10 Ans", 4.2)
+    z_tnx, z_usd, z_cu = _z(m, "Taux 10 Ans"), _z(m, "Index Dollar"), _z(m, "Cuivre")
+    z_oil, z_or, z_semi = _z(m, "Pétrole WTI"), _z(m, "Or"), _z(m, "Semi-conducteurs")
+    mat = max(z_oil, z_or)
+    N = ("Neutre", "badge-neutral")
+
+    def si(cond, vrai, faux=N):
+        return vrai if cond else faux
+
+    r = {}
+    b, s = si(vix > 25, ("Stress", "badge-warn"), si(vix < 17, ("Calme", "badge-fav")))
+    r["SP 500"] = _reco(b, s, f"VIX à {vix:.0f} : " + ("volatilité élevée, réduire la taille des positions." if vix > 25 else
+                        "marché calme, bon moment pour un scan large." if vix < 17 else "niveau de volatilité moyen."))
+    b, s = si(z_tnx <= -1, ("Taux en baisse", "badge-opp"), si(z_tnx >= 1, ("Taux en hausse", "badge-warn")))
+    r["NASDAQ 100"] = _reco(b, s, "Les valeurs de croissance réagissent surtout aux taux longs (actualisation des flux lointains).")
+    b, s = si(z_tnx >= 0.5 and vix < 22, ("Value / cycliques", "badge-fav"))
+    r["Dow Jones"] = _reco(b, s, "Industrielles et financières profitent de taux soutenus et d'un marché calme.")
+    b, s = si(mat >= 1, ("Matières en hausse", "badge-top"), si(mat <= -1, ("Matières en baisse", "badge-warn")))
+    r["TSX 60"] = _reco(b, s, "Indice très exposé à l'énergie, aux mines et aux banques : suit pétrole et or.")
+    b, s = si(z_tnx >= 0.5, ("Banques / assurances", "badge-fav"))
+    r["CAC 40"] = _reco(b, s, "Luxe et financières pèsent lourd : sensible à la consommation mondiale et aux taux.")
+    b, s = si(z_usd >= 1 or z_cu >= 1, ("Export porté", "badge-top"))
+    r["DAX 40"] = _reco(b, s, "Industrie exportatrice : bénéficie d'un dollar fort et d'une demande industrielle soutenue.")
+    r["Euro Stoxx 50"] = _reco("Diversifié", "badge-neutral", "50 grandes capitalisations de la zone euro, sans biais sectoriel marqué.")
+    b, s = si(mat >= 1, ("Énergie / mines", "badge-top"))
+    r["FTSE 100"] = _reco(b, s, "Pondération élevée en énergie, mines et dividendes élevés.")
+    b, s = si(z_tnx >= 0.5, ("Marges bancaires", "badge-fav"))
+    r["Ibex 35"] = _reco(b, s, "Banques espagnoles réactives aux taux d'intérêt.")
+    b, s = si(z_tnx >= 1, ("Banques", "badge-top"))
+    r["FTSE MIB"] = _reco(b, s, "Banques et énergie dominent l'indice.")
+    b, s = si(z_semi >= 1, ("Puces en hausse", "badge-opp"), ("Semi-conducteurs", "badge-fav"))
+    r["AEX Pays-Bas"] = _reco(b, s, "Indice concentré sur ASML et la chaîne des semi-conducteurs.")
+    b, s = si(vix > 20, ("Défensif", "badge-safe"))
+    r["BEL 20"] = _reco(b, s, "Santé et holdings : profil plutôt défensif si la nervosité monte.")
+    b, s = si(vix > 22, ("Refuge", "badge-safe"), ("Haute qualité", "badge-fav"))
+    r["SMI Suisse"] = _reco(b, s, "Santé et consommation défensive, bilans solides, faible cyclicité.")
+    r["OMXS30"] = _reco("Industrie nordique", "badge-neutral", "Industrie exportatrice et ingénierie, sensible à la conjoncture européenne.")
+    b, s = si(z_usd >= 1, ("Dollar fort", "badge-top"), ("Exportateurs", "badge-fav"))
+    r["Nikkei 225"] = _reco(b, s, "Exportateurs sensibles au yen ; vérifier le taux sans risque japonais (voir RF_LOCAL).")
+    b, s = si(vix > 25, ("Volatilité", "badge-warn"))
+    r["Hang Seng"] = _reco(b, s, "Marché souvent valorisé avec décote ; risque réglementaire et géopolitique à garder en tête.")
+    b, s = si(z_cu >= 1, ("Demande industrielle", "badge-opp"))
+    r["CSI 300"] = _reco(b, s, "Le cuivre sert de baromètre de la demande industrielle chinoise.")
+    b, s = si(mat >= 1 or z_cu >= 1, ("Mines en hausse", "badge-top"), ("Mines et banques", "badge-fav"))
+    r["ASX 200"] = _reco(b, s, "Minières et banques dominent l'indice.")
+    r["Nifty 50"] = _reco("Croissance", "badge-fav", "Forte croissance domestique ; valorisations souvent élevées : vérifier la marge de sécurité.")
+    b, s = si(z_oil >= 1, ("Pétrole en hausse", "badge-top"))
+    r["Bovespa"] = _reco(b, s, "Pétrole, minerais et banques : suit les matières premières et les taux locaux.")
+    return r
+
+
+def contexte_macro(m):
+    def fiche(nom, cle, fmt):
+        d = m.get(cle) or {}
+        niveau = d.get("niveau")
+        return {"nom": nom, "valeur": "–" if niveau is None else fmt(niveau),
+                "var": d.get("var_1m", 0.0), "z": d.get("z", 0.0)}
+    return [fiche("VIX", "Volatilité VIX", lambda v: f"{v:.1f}"),
+            fiche("Taux US 10 ans", "Taux 10 Ans", lambda v: f"{v:.2f} %"),
+            fiche("Dollar (DXY)", "Index Dollar", lambda v: f"{v:.1f}"),
+            fiche("Pétrole WTI", "Pétrole WTI", lambda v: f"{v:.1f} $"),
+            fiche("Or", "Or", lambda v: f"{v:,.0f} $".replace(",", " ")),
+            fiche("Cuivre", "Cuivre", lambda v: f"{v:.2f} $")]
+
+
+async def _contexte():
+    macro = await asyncio.to_thread(analyser_tendances_macro)
+    recoms = analyser_recommandations_tous_indices(macro)
+    regions = [{"nom": reg, "marches": [{"nom": n, "nb": len(TICKERS_PAR_INDICE[n]) if n in TICKERS_PAR_INDICE else 500,
+                                          **recoms[n]} for n in noms]} for reg, noms in REGIONS.items()]
+    tops = [n for n, v in recoms.items() if v["style"] in ("badge-top", "badge-opp")]
+    return macro, recoms, regions, tops
+
+
+# =========================================================================
+# ROUTES
+# =========================================================================
 @router.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request):
-    donnees_macro = await asyncio.to_thread(analyser_tendances_macro)
-    recoms = analyser_recommandations_tous_indices(donnees_macro)
-    tops = [k for k, v in recoms.items() if "🔥" in v["badge"] or "⚡" in v["badge"]][:2]
-    top_text = " • ".join(tops) if tops else "CAC 40 • SP 500"
-    return templates.TemplateResponse(request, "index.html", {"recoms": recoms, "top_text": top_text})
+    macro, recoms, regions, tops = await _contexte()
+    return templates.TemplateResponse(request, "index.html", {
+        "regions": regions, "macro": contexte_macro(macro), "defaut": tops[0] if tops else "CAC 40",
+        "tops": tops[:3], "secteurs": SECTEURS}, headers=SANS_CACHE)
+
 
 @router.get("/run", response_class=HTMLResponse)
 async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str = ""):
-    return templates.TemplateResponse(request, "dashboard.html", {"indice": indice, "secteur": secteur})
+    _, _, regions, _ = await _contexte()
+    cfg = {"indice": indice, "secteur": secteur if secteur in SECTEURS else ""}
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "indice": indice, "secteur": cfg["secteur"], "regions": regions, "cfg": cfg}, headers=SANS_CACHE)
+
 
 @router.get("/stream")
 async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
-    secteurs_cibles = [secteur] if secteur else []
-    donnees_macro = await asyncio.to_thread(analyser_tendances_macro)
-    taux_du_jour = await asyncio.to_thread(obtenir_taux_sans_risque)
-    tickers = obtenir_tickers_pour_indice(indice)
+    secteurs_cibles = [secteur] if secteur in SECTEURS else []
+    macro, rf, bench, tickers = await asyncio.gather(
+        asyncio.to_thread(analyser_tendances_macro), asyncio.to_thread(obtenir_taux_sans_risque),
+        asyncio.to_thread(obtenir_benchmark, indice), asyncio.to_thread(obtenir_tickers_pour_indice, indice))
+    tickers = list(dict.fromkeys(tickers))
 
-    async def generer_analyses():
-        for ticker in tickers:
-            resultat = await asyncio.to_thread(analyser_action_complete, ticker, secteurs_cibles, taux_du_jour, donnees_macro)
-            if resultat:
-                yield f"data: {json.dumps(resultat)}\n\n"
-            await asyncio.sleep(0.1)
-        yield "event: close\ndata: end\n\n"
+    def evt(nom, payload):
+        return f"event: {nom}\ndata: {json.dumps(json_safe(payload))}\n\n"
 
-    return StreamingResponse(generer_analyses(), media_type="text/event-stream")
+    async def generer():
+        sem = asyncio.Semaphore(CONCURRENCE)
 
-@router.get("/graphs/{fichier}")
-async def lire_graphique(fichier: str):
-    chemin = os.path.join(dossier_graphs, fichier)
-    if os.path.exists(chemin): return FileResponse(chemin)
-    return HTMLResponse(content="Graphique introuvable", status_code=404)
+        async def travailleur(tk):
+            async with sem:
+                try:
+                    return await asyncio.to_thread(analyser_action_brute, tk, secteurs_cibles, rf, macro, bench)
+                except Exception as e:
+                    print(f"{tk}: {e}")
+                    return None
+
+        taches = [asyncio.create_task(travailleur(tk)) for tk in tickers]
+        lignes, faits = [], 0
+        try:
+            yield evt("init", {"total": len(tickers)})
+            for futur in asyncio.as_completed(taches):
+                res = await futur
+                faits += 1
+                if res:
+                    lignes.append(res)
+                    yield f"data: {json.dumps(json_safe(res))}\n\n"
+                yield evt("progress", {"done": faits})
+                if res and (len(lignes) == 10 or len(lignes) % 20 == 0):
+                    yield evt("scores", calculer_scores(lignes))      # classement provisoire
+            yield evt("scores", calculer_scores(lignes))                # classement définitif
+            yield "event: close\ndata: end\n\n"
+        finally:
+            for t in taches:
+                t.cancel()
+
+    return StreamingResponse(generer(), media_type="text/event-stream",
+                             headers={**SANS_CACHE, "X-Accel-Buffering": "no"})
+
+
+@router.get("/api/detail/{ticker}")
+async def detail_actualites(ticker: str):
+    if not RE_TICKER.match(ticker):
+        raise HTTPException(status_code=400, detail="Ticker invalide")
+    return await asyncio.to_thread(analyser_actualites, ticker)
+
+
+@router.get("/graph/{ticker}")
+async def graphique(ticker: str):
+    if not RE_TICKER.match(ticker):
+        raise HTTPException(status_code=400, detail="Ticker invalide")
+    chemin = await asyncio.to_thread(generer_graphique, ticker)
+    if chemin and os.path.exists(chemin):
+        return FileResponse(chemin, headers=SANS_CACHE)
+    return HTMLResponse("<p style='font-family:sans-serif;padding:1rem'>Graphique indisponible pour ce titre.</p>", status_code=404)
