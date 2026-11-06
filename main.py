@@ -10,20 +10,25 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Monte le dossier app/templates pour servir le CSS et les fichiers statiques
+# Servir le dossier app/templates pour le CSS et les fichiers statiques
 app.mount("/static", StaticFiles(directory="app/templates"), name="static")
 
 app.include_router(api_router)
 
-# ROUTE RACINE : C'est la première chose qui se lance (affiche la connexion)
+# ROUTE 1 : Page de Connexion (Affichée en premier)
 @app.get("/")
 async def read_root():
     return FileResponse("app/templates/Login.html")
 
-# (Optionnel) Route vers ton application après connexion
+# ROUTE 2 : Page d'Inscription
+@app.get("/register")
+async def read_register():
+    return FileResponse("app/templates/register.html")
+
+# ROUTE 3 : Redirection vers le screener / dashboard
 @app.get("/dashboard")
 async def read_dashboard():
-    return FileResponse("app/templates/index.html") # Adapte selon le nom de ton fichier screener
+    return FileResponse("app/templates/index.html")
 
 @app.middleware("http")
 async def desactiver_cache_navigateur(request: Request, call_next):
