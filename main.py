@@ -18,12 +18,12 @@ app.include_router(api_router)
 # ROUTE RACINE : C'est la première chose qui se lance (affiche la connexion)
 @app.get("/")
 async def read_root():
-    return FileResponse("app/templates/login.html")
+    return FileResponse("app/templates/Login.html")
 
 # (Optionnel) Route vers ton application après connexion
 @app.get("/dashboard")
 async def read_dashboard():
-    return FileResponse("app/templates/dashboard.html") # Adapte selon le nom de ton fichier screener
+    return FileResponse("app/templates/index.html") # Adapte selon le nom de ton fichier screener
 
 @app.middleware("http")
 async def desactiver_cache_navigateur(request: Request, call_next):
