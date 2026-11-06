@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,20 +11,36 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# 1. Dossier statique pour le CSS
-app.mount("/static", StaticFiles(directory="app/templates"), name="static")
+# Chemin absolu dynamique (indépendant du répertoire d'exécution de Docker)
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 
-# 2. ROUTE RACINE (Placée AVANT include_router) -> Affiche la connexion
+if not TEMPLATES_DIR.exists():
+    TEMPLATES_DIR = BASE_DIR / "templates"
+
+app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR)), name="static")
+
+# Helper pour trouver un fichier HTML quelle que soit sa casse
+def trouver_template(nom_fichier: str) -> Path:
+    f = TEMPLATES_DIR / nom_fichier
+    if f.exists():
+        return f
+    # Alternative avec majuscule
+    f_cap = TEMPLATES_DIR / nom_fichier.capitalize()
+    if f_cap.exists():
+        return f_cap
+    raise FileNotFoundError(f"Fichier {nom_fichier} introuvable dans {TEMPLATES_DIR}")
+
 @app.get("/")
 async def read_root():
-    return FileResponse("app/templates/login.html")
+    fichier = trouver_template("login.html")
+    return FileResponse(str(fichier))
 
-# 3. ROUTE INSCRIPTIONs
 @app.get("/register")
 async def read_register():
-    return FileResponse("app/templates/register.html")
+    fichier = trouver_template("register.html")
+    return FileResponse(str(fichier))
 
-# 4. INCLUSION DES ROUTES DU SCREENER (Après la racine)
 app.include_router(api_router)
 
 @app.middleware("http")
