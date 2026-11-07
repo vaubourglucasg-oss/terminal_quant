@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from app.api.screener import router as api_router
@@ -9,10 +10,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Servir le dossier des templates pour le CSS et le JS
-app.mount("/static", StaticFiles(directory="app/templates"), name="static")
+BASE_DIR = Path(__file__).resolve().parent
 
-# Inclusion directe des routes du screener (la racine / charge directement index.html)
+# FIXATION DU DOSSIER STATIQUE : Pointer vers app/static (et non app/templates)
+STATIC_DIR = BASE_DIR / "app" / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 app.include_router(api_router)
 
 @app.middleware("http")

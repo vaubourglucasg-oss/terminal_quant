@@ -1,4 +1,5 @@
-/* Tableau de bord. Les colonnes sont pilotées par les NOMS de champs et les valeurs restent numériques. */
+window.Quant = window.Quant || {};
+
 $(function () {
   const CFG = window.CFG;
   let favoris = {};
@@ -17,7 +18,9 @@ $(function () {
     'Consumer Cyclical': 'Conso. cyclique', 'Consumer Defensive': 'Conso. défensive', 'Industrials': 'Industrie',
     'Energy': 'Énergie', 'Basic Materials': 'Matériaux', 'Utilities': 'Services publics',
     'Real Estate': 'Immobilier', 'Communication Services': 'Communication' };
-  const classeSigne = v => vide(v) ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
+
+  // Exposer les variables tout de suite pour compare.js
+  Object.assign(window.Quant, { donnees, esc, fmt, vide, SECTEURS_FR });
 
   function colNum(champ, titre, aide, d, suf, classeFn) {
     return {
