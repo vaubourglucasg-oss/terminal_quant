@@ -9,9 +9,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# 👇 C'est ici qu'on corrige : on indique à FastAPI de chercher le CSS/JS dans templates
+# Servir le dossier des templates pour le CSS et le JS
 app.mount("/static", StaticFiles(directory="app/templates"), name="static")
 
+# Inclusion directe des routes du screener (la racine / charge directement index.html)
 app.include_router(api_router)
 
 @app.middleware("http")

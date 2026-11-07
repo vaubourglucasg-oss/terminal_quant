@@ -230,6 +230,20 @@ async def detail_actualites(ticker: str):
     return await asyncio.to_thread(analyser_actualites, ticker)
 
 
+@router.get("/api/titre/{ticker}")
+async def titre_isole(ticker: str):
+    """Une action quelconque (hors de l'indice en cours), pour le comparateur. Mêmes métriques brutes que le scan,
+    sans notation relative : le score est un classement dans un univers, qu'un titre isolé n'a pas."""
+    if not RE_TICKER.match(ticker):
+        raise HTTPException(status_code=400, detail="Ticker invalide")
+    macro, rf = await asyncio.gather(asyncio.to_thread(analyser_tendances_macro),
+                                     asyncio.to_thread(obtenir_taux_sans_risque))
+    ligne = await asyncio.to_thread(analyser_action_brute, ticker.upper(), [], rf, macro, None)
+    if not ligne:
+        raise HTTPException(status_code=404, detail="Titre introuvable ou données insuffisantes")
+    return ligne
+
+
 @router.get("/graph/{ticker}")
 async def graphique(ticker: str):
     if not RE_TICKER.match(ticker):

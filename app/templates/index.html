@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Terminal quantitatif — choisir un marché</title>
+    <script src="/static/theme.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -45,6 +47,9 @@
 
     <div class="barre-lancer">
         <div class="in">
+            <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème">
+                <i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span>
+            </button>
             <label>Secteur
                 <select name="secteur">
                     <option value="">Tous les secteurs</option>

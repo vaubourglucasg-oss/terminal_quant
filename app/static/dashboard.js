@@ -31,9 +31,10 @@ $(function () {
   }
 
   const COLONNES = [
-    { data: null, orderable: false, className: 't-g', title: '', width: '22px',
+    { data: null, orderable: false, className: 't-g', title: '', width: '52px',
       render: (d, type, r) => type === 'display'
         ? `<i class="etoile ${favoris[r.ticker] ? 'actif' : ''}" data-ticker="${esc(r.ticker)}" role="button" tabindex="0" aria-label="Ajouter aux favoris" title="Favori">★</i>`
+        + `<button type="button" class="cmp ${(window.Quant && window.Quant.cmpSel || []).includes(r.ticker) ? 'actif' : ''}" data-ticker="${esc(r.ticker)}" title="Ajouter au comparateur" aria-label="Comparer ${esc(r.ticker)}">⇄</button>`
         : (favoris[r.ticker] ? 1 : 0) },
     { data: 'ticker', className: 't-g', title: 'Titre',
       render: (v, type, r) => type === 'display' ? `<div class="titre"><strong>${esc(v)}</strong><span title="${esc(r.nom)}">${esc(r.nom)}</span></div>`
@@ -222,7 +223,7 @@ $(function () {
   $('#tbl tbody').on('click', 'button[data-action]', function () {
     const tk = this.dataset.ticker, zone = $(this).closest('.detail');
     if (this.dataset.action === 'graph') {
-      zone.find('.zone-graph').html(`<iframe src="/graph/${encodeURIComponent(tk)}" title="Graphique ${esc(tk)}" loading="lazy"></iframe>`);
+      zone.find('.zone-graph').html(`<iframe src="/graph/${encodeURIComponent(tk)}#${window.Theme ? window.Theme.get() : 'dark'}" title="Graphique ${esc(tk)}" loading="lazy"></iframe>`);
     } else {
       const cible = zone.find('.actus').text('Chargement…');
       fetch(`/api/detail/${encodeURIComponent(tk)}`).then(r => r.json()).then(d => {
@@ -291,28 +292,6 @@ $(function () {
     $('#etat').text('Connexion interrompue : rechargez la page pour relancer l\'analyse.');
   };
 
-  // --- GESTION DU THÈME SOMBRE / CLAIR ---
-  const themeBtn = $('#themeToggleBtn');
-  const themeIcon = $('#themeIcon');
-  const themeText = $('#themeText');
-
-  const savedTheme = localStorage.getItem('quant_theme') || 'dark';
-  if (savedTheme === 'light') {
-      $('body').addClass('light-mode');
-      themeIcon.removeClass('fa-moon').addClass('fa-sun');
-      themeText.text('Clair');
-  }
-
-  themeBtn.on('click', function() {
-      $('body').toggleClass('light-mode');
-      if ($('body').hasClass('light-mode')) {
-          localStorage.setItem('quant_theme', 'light');
-          themeIcon.removeClass('fa-moon').addClass('fa-sun');
-          themeText.text('Clair');
-      } else {
-          localStorage.setItem('quant_theme', 'dark');
-          themeIcon.removeClass('fa-sun').addClass('fa-moon');
-          themeText.text('Sombre');
-      }
-  });
+  // Exposé pour compare.js (comparateur) ; le thème est géré par theme.js
+  window.Quant = { donnees, table, esc, fmt, vide, SECTEURS_FR };
 });

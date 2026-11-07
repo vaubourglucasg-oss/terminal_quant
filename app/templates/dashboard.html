@@ -4,27 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ indice }} — Terminal quantitatif</title>
+    <script src="/static/theme.js"></script>
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
-    <!-- AJOUTE CETTE LIGNE : -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="topbar">
-    <h1>Screener Actif : <span style="color: var(--accent);">{{ indice }}</span></h1>
-    
-    <div style="display: flex; align-items: center; gap: 15px;">
-        <!-- Bouton Switch Thème -->
-        <button id="themeToggleBtn" style="background: rgba(56, 189, 248, 0.15); border: 1px solid var(--accent); color: var(--text-light); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: 600;">
+        <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème">
             <i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span>
         </button>
-
-        <div style="font-size: 0.85em; color: var(--text-muted);" id="progressText">
-            <i class="fa-solid fa-circle-notch fa-spin"></i> Traitement...
-        </div>
     </div>
-</div>
 <div class="app">
     <nav class="rail" aria-label="Marchés">
         <a class="marque" href="/">Terminal quantitatif</a>
@@ -36,6 +27,11 @@
         </a>
         {% endfor %}
         {% endfor %}
+
+        <div class="rail-bas">
+            <h3>Paramètres</h3>
+            <div id="parametres"><!-- ton code ici --></div>
+        </div>
     </nav>
 
     <main class="principal">
@@ -102,5 +98,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
 <script src="/static/dashboard.js"></script>
+<script src="/static/compare.js"></script>
 </body>
 </html>
