@@ -6,3 +6,4 @@ pandas>=2.0.0
 numpy>=1.24.0
 plotly>=5.15.0
 textblob>=0.17.1
+requests-cache
