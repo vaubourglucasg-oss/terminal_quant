@@ -24,9 +24,11 @@ $(function () {
   // Exposer immédiatement pour le comparateur
   Object.assign(window.Quant, { donnees, esc, fmt, vide, SECTEURS_FR });
 
+  // ---------- utilitaires (remplace les anciennes versions par celles-ci) ----------
   function colNum(champ, titre, aide, d, suf, classeFn) {
+    const aideHtml = aide ? `<i class="fa-solid fa-circle-question icone-aide" title="${esc(aide)}"></i>` : '';
     return {
-      data: champ, defaultContent: '', className: 'num', title: `<span title="${esc(aide)}">${titre}</span>`,
+      data: champ, defaultContent: '', className: 'num', title: `<span>${titre}${aideHtml}</span>`,
       render: (v, type, r) => {
         if (type === 'export') return vide(v) ? '' : v;
         if (type !== 'display') return vide(v) ? -1e12 : v;
@@ -35,6 +37,13 @@ $(function () {
     };
   }
 
+  // Modifie la ligne dépliable pour inclure l'icône d'aide
+  const dl = (label, valeur, aide) => {
+    const aideHtml = aide ? ` <i class="fa-solid fa-circle-question icone-aide" title="${esc(aide)}"></i>` : '';
+    return `<div><dt>${label}${aideHtml}</dt><dd>${valeur}</dd></div>`;
+  };
+
+  // ---------- COLONNES avec textes simplifiés pour les débutants ----------
   const COLONNES = [
     { data: null, orderable: false, className: 't-g', title: '', width: '52px',
       render: (d, type, r) => type === 'display'
@@ -54,7 +63,7 @@ $(function () {
     { data: 'prix', defaultContent: '', className: 'num', title: 'Cours',
       render: (v, type, r) => type === 'display' ? `${fmt(v, 2)} <small>${esc(r.devise)}</small>` : (vide(v) ? -1e12 : v) },
     { data: 'score', defaultContent: '', className: 'num',
-      title: '<span title="Rang percentile (0-100) du score composite parmi les titres analysés de ce marché. 90 = parmi les 10 % meilleurs.">Score</span>',
+      title: `<span>Score <i class="fa-solid fa-circle-question icone-aide" title="Note sur 100 résumant la santé globale de l'entreprise. Plus c'est proche de 100, mieux c'est ! (Ex: 90 = fait partie des 10% meilleures)"></i></span>`,
       render: (v, type) => {
         if (type === 'export') return vide(v) ? '' : v;
         if (type !== 'display') return vide(v) ? -1 : v;
@@ -62,25 +71,27 @@ $(function () {
         return `<span class="score ${v >= 75 ? 'haut' : (v <= 30 ? 'bas' : 'moy')}">${v}</span>`;
       } },
     { data: null, orderable: false, className: 'num',
-      title: '<span title="Profil du titre. De gauche à droite : Valorisation, Qualité, Croissance, Risque (haut = plus sûr), Momentum. Chaque barre est un percentile.">Profil</span>',
+      title: `<span>Profil <i class="fa-solid fa-circle-question icone-aide" title="De gauche à droite : Valorisation (est-ce pas cher ?), Qualité, Croissance, Sécurité, Tendance. Une barre pleine = excellent."></i></span>`,
       render: (d, type, r) => {
         if (type !== 'display') return '';
-        const noms = ['Valorisation', 'Qualité', 'Croissance', 'Risque (haut = sûr)', 'Momentum'];
+        const noms = ['Valorisation (Prix)', 'Qualité (Rentabilité)', 'Croissance', 'Risque (Sécurité)', 'Momentum (Tendance)'];
         return '<span class="profil">' + ['valo', 'qual', 'crois', 'risq', 'mom'].map((k, i) => {
           const v = r[k];
-          return vide(v) ? `<i class="vide" style="height:3px" title="${noms[i]} : n/d"></i>`
+          return vide(v) ? `<i class="vide" style="height:3px" title="${noms[i]} : Inconnu"></i>`
             : `<i style="height:${Math.max(3, Math.round(v * 0.22))}px" title="${noms[i]} : ${v}/100"></i>`;
         }).join('') + '</span>';
       } },
-    { data: 'signal', defaultContent: '', className: 't-g', title: '<span title="Signal relatif à l\'indice : meilleurs scores + garde-fous (risque, détresse, marge de sécurité). Ce n\'est pas un conseil en investissement.">Signal</span>',
+    { data: 'signal', defaultContent: '', className: 't-g', 
+      title: `<span>Signal <i class="fa-solid fa-circle-question icone-aide" title="Notre IA indique ACHAT si l'action est à la fois de grande qualité ET en promotion. Attention : ceci n'est pas un conseil financier, faites vos recherches."></i></span>`,
       render: (v, type) => {
         if (type !== 'display') return v || '';
         if (!v) return '<span class="nd">…</span>';
         const c = v.startsWith('ACHAT') ? 'pos' : (v === 'VENTE' ? 'neg' : (v === 'INSUFFISANT' ? 'nd' : ''));
         return `<span class="signal ${c}">${esc(v)}</span>`;
       } },
-    colNum('marge_secu', 'Marge séc.', 'Marge de sécurité = (valeur estimée − cours) / valeur estimée.', 1, ' %', v => v > 15 ? 'pos' : (v < 0 ? 'neg' : '')),
-    { data: 'valo_base', defaultContent: '', className: 'num', title: '<span title="Valeur par action, scénario central.">Valeur estimée</span>',
+    colNum('marge_secu', 'Marge séc.', "L'action est-elle en solde par rapport à sa vraie valeur ? (Ex: 20% = elle est vendue 20% moins cher que ce qu'elle vaut vraiment).", 1, ' %', v => v > 15 ? 'pos' : (v < 0 ? 'neg' : '')),
+    { data: 'valo_base', defaultContent: '', className: 'num', 
+      title: `<span>Valeur estimée <i class="fa-solid fa-circle-question icone-aide" title="Le VRAI prix que devrait valoir cette action aujourd'hui selon nos calculs (Scénario moyen)."></i></span>`,
       render: (v, type, r) => {
         if (type === 'export') return vide(v) ? '' : v;
         if (type !== 'display') return vide(v) ? -1e12 : v;
@@ -88,14 +99,13 @@ $(function () {
         const fourchette = (!vide(r.valo_bear) && !vide(r.valo_bull)) ? `<br><small>${fmt(r.valo_bear, 0)} – ${fmt(r.valo_bull, 0)}</small>` : '';
         return `${fmt(v, 2)}${fourchette}`;
       } },
-    colNum('spread', 'ROIC − WACC', 'Création de valeur : rentabilité du capital investi moins coût du capital.', 1, ' pts', classeSigne),
-    colNum('fcf_yield', 'FCF yield', 'Free cash-flow / capitalisation boursière.', 1, ' %', classeSigne),
-    colNum('per', 'PER', 'Cours / bénéfice par action (12 derniers mois).', 1, ''),
-    colNum('cagr_ca', 'Croiss. CA 3 ans', 'Croissance annuelle moyenne du chiffre d\'affaires sur 3 ans.', 1, ' %', classeSigne),
-    colNum('vol', 'Volatilité', 'Volatilité annualisée sur 1 an.', 0, ' %'),
-    colNum('mom_12_1', 'Momentum 12-1', 'Performance sur 12 mois en excluant le dernier mois.', 0, ' %', classeSigne),
+    colNum('spread', 'Création Valeur', "L'entreprise s'enrichit-elle ? Si positif, cela veut dire que l'entreprise gagne plus d'argent que ce que lui coûtent ses dettes (ROIC - WACC).", 1, ' pts', classeSigne),
+    colNum('fcf_yield', 'Rendement Cash', "Pourcentage de CASH PUR que l'entreprise met de côté chaque année par rapport à sa valeur en bourse. Au-dessus de 5% c'est très bien.", 1, ' %', classeSigne),
+    colNum('per', 'PER', "Combien d'années de bénéfices faut-il pour rembourser l'achat de l'action ? Sous 15 = l'action est généralement considérée comme 'pas chère'.", 1, ''),
+    colNum('cagr_ca', 'Croiss. Ventes', "Vitesse à laquelle les ventes de l'entreprise augmentent en moyenne chaque année (sur 3 ans).", 1, ' %', classeSigne),
+    colNum('vol', 'Volatilité', "L'action fait-elle le yoyo ? Une volatilité élevée (ex: >35%) signifie que le prix bouge très violemment, ce qui est risqué.", 0, ' %'),
+    colNum('mom_12_1', 'Tendance', "La dynamique de l'action sur 1 an. Si c'est positif, l'action est à la mode et monte. Si c'est très négatif, les investisseurs la fuient.", 0, ' %', classeSigne),
   ];
-  const COLS_EXPORT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
   // ---------- tableau ----------
   const table = $('#tbl').DataTable({
