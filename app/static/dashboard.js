@@ -1,3 +1,4 @@
+/* dashboard.js - Tableau de bord complet */
 window.Quant = window.Quant || {};
 
 $(function () {
@@ -5,8 +6,8 @@ $(function () {
   let favoris = {};
   try { favoris = JSON.parse(localStorage.getItem('quant_favoris') || '{}'); } catch (e) { favoris = {}; }
 
-  const donnees = {};      // ticker -> ligne
-  const lignes = {};       // ticker -> API de ligne DataTables
+  const donnees = {};
+  const lignes = {};
   let total = 0, termine = false;
 
   // ---------- utilitaires ----------
@@ -18,8 +19,9 @@ $(function () {
     'Consumer Cyclical': 'Conso. cyclique', 'Consumer Defensive': 'Conso. défensive', 'Industrials': 'Industrie',
     'Energy': 'Énergie', 'Basic Materials': 'Matériaux', 'Utilities': 'Services publics',
     'Real Estate': 'Immobilier', 'Communication Services': 'Communication' };
+  const classeSigne = v => vide(v) ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
 
-  // Exposer les variables tout de suite pour compare.js
+  // Exposer immédiatement pour le comparateur
   Object.assign(window.Quant, { donnees, esc, fmt, vide, SECTEURS_FR });
 
   function colNum(champ, titre, aide, d, suf, classeFn) {
@@ -106,6 +108,8 @@ $(function () {
       infoFiltered: '(sur _MAX_)', emptyTable: 'Analyse en cours, les premiers titres arrivent…',
       zeroRecords: 'Aucun titre ne correspond aux filtres.', paginate: { previous: 'Précédent', next: 'Suivant' } }
   });
+  
+  window.Quant.table = table; // Utilisé par le comparateur
 
   // ---------- filtres ----------
   const nombre = id => { const v = parseFloat($(id).val()); return Number.isNaN(v) ? null : v; };
@@ -254,47 +258,54 @@ $(function () {
     if (minuterie) return; 
     minuterie = setTimeout(() => { 
       minuterie = null; 
-      // Empêche le redessinement automatique si l'utilisateur tape dans la barre de recherche (évite la perte de focus)
-      if (document.activeElement && $(document.activeElement).closest('.dataTables_filter').length) {
-        return; 
-      }
+      if (document.activeElement && $(document.activeElement).closest('.dataTables_filter').length) return; 
       table.draw(false); 
       majResume(); 
     }, 250); 
   };
 
-  // ---------- flux temps réel ----------
+  // ---------- flux temps réel (SSE) ----------
+  console.log("Tentative de connexion SSE vers:", CFG.indice);
   const url = `/stream?indice=${encodeURIComponent(CFG.indice)}&secteur=${encodeURIComponent(CFG.secteur)}`;
   const src = new EventSource(url);
-  src.addEventListener('init', e => { total = JSON.parse(e.data).total; $('#etat').text(`Analyse de ${total} titres…`); });
+  
+  src.addEventListener('init', e => { 
+    console.log("Flux initié par le serveur !");
+    total = JSON.parse(e.data).total; 
+    $('#etat').text(`Analyse de ${total} titres…`); 
+  });
+  
   src.onmessage = e => {
     const r = JSON.parse(e.data);
     donnees[r.ticker] = r;
     lignes[r.ticker] = table.row.add(r);
     redessiner();
   };
+  
   src.addEventListener('progress', e => {
     const fait = JSON.parse(e.data).done;
     $('#barre').attr('value', total ? fait / total : 0);
     $('#etat').text(`${fait} / ${total} titres traités`);
   });
+  
   src.addEventListener('scores', e => {
     const sc = JSON.parse(e.data);
     Object.keys(sc).forEach(tk => { if (donnees[tk]) { Object.assign(donnees[tk], sc[tk]); lignes[tk].data(donnees[tk]); } });
     redessiner();
   });
+  
   src.addEventListener('close', () => {
+    console.log("Analyse terminée avec succès.");
     termine = true; src.close();
     $('#barre').attr('value', 1);
     $('#etat').text('Analyse terminée.');
     table.draw(false); majResume();
   });
-  src.onerror = () => {
+  
+  src.onerror = (e) => {
+    console.error("Erreur de connexion au flux SSE (Le backend a coupé la connexion)", e);
     if (termine) return;
     src.close();
-    $('#etat').text('Connexion interrompue : rechargez la page pour relancer l\'analyse.');
+    $('#etat').text('Connexion interrompue : rechargez la page ou redémarrez le serveur Python.');
   };
-
-  // Exposé pour compare.js (comparateur) ; le thème est géré par theme.js
-  window.Quant = { donnees, table, esc, fmt, vide, SECTEURS_FR };
 });
