@@ -3,6 +3,18 @@ import re
 import json
 import asyncio
 
+import requests_cache
+
+# =========================================================================
+# ACTIVATION DU CACHE GLOBAL (ANTI-BLOCAGE YAHOO FINANCE)
+# Intercepte toutes les requêtes (yfinance inclus) et les stocke 5 heures.
+# =========================================================================
+requests_cache.install_cache(
+    'cache_bourse_v2',
+    expire_after=18000, # 5 heures en secondes
+    backend='sqlite'
+)
+
 import pandas as pd
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
@@ -17,7 +29,7 @@ from app.engine.sentiment import analyser_actualites
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 SANS_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
-CONCURRENCE = 6                      # téléchargements simultanés (au-delà, Yahoo limite le débit)
+CONCURRENCE = 6                      # téléchargements simultanés
 RE_TICKER = re.compile(r"^[A-Za-z0-9.\-&^=]{1,20}$")
 
 SECTEURS = ["Technology", "Healthcare", "Financial Services", "Consumer Cyclical", "Consumer Defensive",
@@ -66,23 +78,15 @@ def obtenir_tickers_pour_indice(indice: str):
     return TICKERS_PAR_INDICE.get(indice, ["MC.PA", "TTE.PA", "AI.PA"])
 
 
-# =========================================================================
-# CONTEXTE MACRO
-# Les seuils portent sur le z-score à 1 mois (rendement / volatilité attendue) et, pour le VIX et les
-# taux, sur le NIVEAU. Ce sont des repères narratifs (aucun backtest) : ils n'entrent PAS dans le score.
-# =========================================================================
 def _z(m, nom):
     return (m.get(nom) or {}).get("z") or 0.0
-
 
 def _niveau(m, nom, defaut):
     v = (m.get(nom) or {}).get("niveau")
     return defaut if v is None else v
 
-
 def _reco(badge, style, conseil):
     return {"badge": badge, "style": style, "conseil": conseil}
-
 
 def analyser_recommandations_tous_indices(m):
     vix, tnx = _niveau(m, "Volatilité VIX", 18.0), _niveau(m, "Taux 10 Ans", 4.2)
@@ -135,7 +139,6 @@ def analyser_recommandations_tous_indices(m):
     r["Bovespa"] = _reco(b, s, "Pétrole, minerais et banques : suit les matières premières et les taux locaux.")
     return r
 
-
 def contexte_macro(m):
     def fiche(nom, cle, fmt):
         d = m.get(cle) or {}
@@ -149,7 +152,6 @@ def contexte_macro(m):
             fiche("Or", "Or", lambda v: f"{v:,.0f} $".replace(",", " ")),
             fiche("Cuivre", "Cuivre", lambda v: f"{v:.2f} $")]
 
-
 async def _contexte():
     macro = await asyncio.to_thread(analyser_tendances_macro)
     recoms = analyser_recommandations_tous_indices(macro)
@@ -157,7 +159,6 @@ async def _contexte():
                                           **recoms[n]} for n in noms]} for reg, noms in REGIONS.items()]
     tops = [n for n, v in recoms.items() if v["style"] in ("badge-top", "badge-opp")]
     return macro, recoms, regions, tops
-
 
 # =========================================================================
 # ROUTES
@@ -169,7 +170,6 @@ async def landing_page(request: Request):
         "regions": regions, "macro": contexte_macro(macro), "defaut": tops[0] if tops else "CAC 40",
         "tops": tops[:3], "secteurs": SECTEURS}, headers=SANS_CACHE)
 
-
 @router.get("/run", response_class=HTMLResponse)
 async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str = ""):
     _, _, regions, _ = await _contexte()
@@ -177,31 +177,42 @@ async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str 
     return templates.TemplateResponse(request, "dashboard.html", {
         "indice": indice, "secteur": cfg["secteur"], "regions": regions, "cfg": cfg}, headers=SANS_CACHE)
 
-
 @router.get("/stream")
 async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
     secteurs_cibles = [secteur] if secteur in SECTEURS else []
-    macro, rf, bench, tickers = await asyncio.gather(
-        asyncio.to_thread(analyser_tendances_macro), asyncio.to_thread(obtenir_taux_sans_risque),
-        asyncio.to_thread(obtenir_benchmark, indice), asyncio.to_thread(obtenir_tickers_pour_indice, indice))
-    tickers = list(dict.fromkeys(tickers))
 
     def evt(nom, payload):
         return f"event: {nom}\ndata: {json.dumps(json_safe(payload))}\n\n"
 
     async def generer():
+        # BOUCLIER 1 : Si Yahoo bloque l'initialisation macro/taux, on ne plante pas tout
+        try:
+            macro, rf, bench, tickers = await asyncio.gather(
+                asyncio.to_thread(analyser_tendances_macro), 
+                asyncio.to_thread(obtenir_taux_sans_risque),
+                asyncio.to_thread(obtenir_benchmark, indice), 
+                asyncio.to_thread(obtenir_tickers_pour_indice, indice)
+            )
+            tickers = list(dict.fromkeys(tickers))
+        except Exception as e:
+            print(f"Erreur fatale initialisation stream (Rate Limit ?): {e}")
+            yield "event: close\ndata: end\n\n"
+            return
+
         sem = asyncio.Semaphore(CONCURRENCE)
 
         async def travailleur(tk):
             async with sem:
+                # BOUCLIER 2 : Si une action a des données mathématiques cassées, on l'ignore silencieusement
                 try:
                     return await asyncio.to_thread(analyser_action_brute, tk, secteurs_cibles, rf, macro, bench)
                 except Exception as e:
-                    print(f"{tk}: {e}")
+                    print(f"Action poison ignorée ({tk}) suite à une erreur : {e}")
                     return None
 
         taches = [asyncio.create_task(travailleur(tk)) for tk in tickers]
         lignes, faits = [], 0
+        
         try:
             yield evt("init", {"total": len(tickers)})
             for futur in asyncio.as_completed(taches):
@@ -210,10 +221,29 @@ async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
                 if res:
                     lignes.append(res)
                     yield f"data: {json.dumps(json_safe(res))}\n\n"
+                
                 yield evt("progress", {"done": faits})
+                
                 if res and (len(lignes) == 10 or len(lignes) % 20 == 0):
-                    yield evt("scores", calculer_scores(lignes))      # classement provisoire
-            yield evt("scores", calculer_scores(lignes))                # classement définitif
+                    # BOUCLIER 3 : Sécurisation du calcul de score intermédiaire
+                    try:
+                        yield evt("scores", calculer_scores(lignes))
+                    except Exception as e:
+                        print(f"Erreur ignorée dans le classement partiel : {e}")
+            
+            # Classement définitif final
+            try:
+                if lignes:
+                    yield evt("scores", calculer_scores(lignes))
+            except Exception as e:
+                print(f"Erreur ignorée dans le classement final : {e}")
+                
+            yield "event: close\ndata: end\n\n"
+        
+        except asyncio.CancelledError:
+            print("Le client s'est déconnecté (onglet fermé).")
+        except Exception as e:
+            print(f"Erreur globale inattendue dans le flux SSE : {e}")
             yield "event: close\ndata: end\n\n"
         finally:
             for t in taches:
@@ -222,18 +252,14 @@ async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = ""):
     return StreamingResponse(generer(), media_type="text/event-stream",
                              headers={**SANS_CACHE, "X-Accel-Buffering": "no"})
 
-
 @router.get("/api/detail/{ticker}")
 async def detail_actualites(ticker: str):
     if not RE_TICKER.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker invalide")
     return await asyncio.to_thread(analyser_actualites, ticker)
 
-
 @router.get("/api/titre/{ticker}")
 async def titre_isole(ticker: str):
-    """Une action quelconque (hors de l'indice en cours), pour le comparateur. Mêmes métriques brutes que le scan,
-    sans notation relative : le score est un classement dans un univers, qu'un titre isolé n'a pas."""
     if not RE_TICKER.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker invalide")
     macro, rf = await asyncio.gather(asyncio.to_thread(analyser_tendances_macro),
@@ -242,7 +268,6 @@ async def titre_isole(ticker: str):
     if not ligne:
         raise HTTPException(status_code=404, detail="Titre introuvable ou données insuffisantes")
     return ligne
-
 
 @router.get("/graph/{ticker}")
 async def graphique(ticker: str):
