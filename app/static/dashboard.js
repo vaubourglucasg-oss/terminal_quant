@@ -24,7 +24,6 @@ $(function () {
   // Exposer immédiatement pour le comparateur
   Object.assign(window.Quant, { donnees, esc, fmt, vide, SECTEURS_FR });
 
-  // ---------- utilitaires (remplace les anciennes versions par celles-ci) ----------
   function colNum(champ, titre, aide, d, suf, classeFn) {
     const aideHtml = aide ? `<i class="fa-solid fa-circle-question icone-aide" title="${esc(aide)}"></i>` : '';
     return {
@@ -37,7 +36,6 @@ $(function () {
     };
   }
 
-  // Modifie la ligne dépliable pour inclure l'icône d'aide
   const dl = (label, valeur, aide) => {
     const aideHtml = aide ? ` <i class="fa-solid fa-circle-question icone-aide" title="${esc(aide)}"></i>` : '';
     return `<div><dt>${label}${aideHtml}</dt><dd>${valeur}</dd></div>`;
@@ -107,6 +105,8 @@ $(function () {
     colNum('mom_12_1', 'Tendance', "La dynamique de l'action sur 1 an. Si c'est positif, l'action est à la mode et monte. Si c'est très négatif, les investisseurs la fuient.", 0, ' %', classeSigne),
   ];
 
+  const COLS_EXPORT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+
   // ---------- tableau ----------
   const table = $('#tbl').DataTable({
     data: [], columns: COLONNES, pageLength: 100, order: [[4, 'desc']], autoWidth: false, dom: 'Bfrtip',
@@ -119,7 +119,7 @@ $(function () {
       zeroRecords: 'Aucun titre ne correspond aux filtres.', paginate: { previous: 'Précédent', next: 'Suivant' } }
   });
   
-  window.Quant.table = table; // Utilisé par le comparateur
+  window.Quant.table = table;
 
   // ---------- filtres ----------
   const nombre = id => { const v = parseFloat($(id).val()); return Number.isNaN(v) ? null : v; };
@@ -169,8 +169,6 @@ $(function () {
   $('#tbl tbody').on('click', '.etoile', function (e) { e.stopPropagation(); basculerFavori(this); });
   $('#tbl tbody').on('keydown', '.etoile', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); basculerFavori(this); } });
 
-  // ---------- ligne dépliable ----------
-  const dl = (label, valeur, aide) => `<div><dt title="${esc(aide || '')}">${label}</dt><dd>${valeur}</dd></div>`;
   function detailHtml(r) {
     const alertes = [].concat(r.alertes || [], r.alertes_score || []);
     const fourch = (!vide(r.valo_bear) && !vide(r.valo_bull)) ? ` <small>(${fmt(r.valo_bear, 2)} – ${fmt(r.valo_bull, 2)})</small>` : '';
