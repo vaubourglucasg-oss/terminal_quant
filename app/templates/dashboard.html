@@ -6,44 +6,41 @@
     <title>{{ indice }} — Terminal quantitatif</title>
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
-    <!-- AJOUTE CETTE LIGNE : -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="/static/theme.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="topbar">
-    <h1>Screener Actif : <span style="color: var(--accent);">{{ indice }}</span></h1>
-    
-      <div class="topbar">
-    <button id="themeToggleBtn" class="theme-btn" type="button">
+        <h1 style="font-size: 1.1rem; margin: 0; font-weight: 500;">Screener Actif : <span style="color: var(--marine);">{{ indice }}</span></h1>
+        
+        <div style="font-size: 0.85em; color: var(--muted);" id="progressText">
+            <i class="fa-solid fa-circle-notch fa-spin"></i> Traitement...
+        </div>
+
+        <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème">
             <i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span>
         </button>
     </div>
 
-        <div style="font-size: 0.85em; color: var(--text-muted);" id="progressText">
-            <i class="fa-solid fa-circle-notch fa-spin"></i> Traitement...
-        </div>
-    </div>
-</div>
 <div class="app">
     <nav class="rail" aria-label="Marchés">
-          <div class="rail-bas">
-            <h3>Paramètres</h3>
-            <div id="parametres">
         <a class="marque" href="/">Terminal quantitatif</a>
+        
         {% for region in regions %}
         <h3>{{ region.nom }}</h3>
         {% for mk in region.marches %}
         <a class="m {% if mk.nom == indice %}actif{% endif %}" href="/run?indice={{ mk.nom | urlencode }}{% if secteur %}&secteur={{ secteur | urlencode }}{% endif %}" title="{{ mk.badge }} : {{ mk.conseil }}">
             <span>{{ mk.nom }}</span><span class="pt {{ mk.style }}"></span>
         </a>
-          <div class="rail-bas">
+        {% endfor %}
+        {% endfor %}
+
+        <!-- Unique bloc Paramètres positionné proprement tout en bas de la barre -->
+        <div class="rail-bas">
             <h3>Paramètres</h3>
             <div id="parametres"><!-- ton code ici --></div>
-            </div>
-        {% endfor %}
-        {% endfor %}
+        </div>
     </nav>
 
     <main class="principal">
@@ -104,14 +101,11 @@
 </div>
 
 <script>window.CFG = {{ cfg | tojson }};</script>
-<!-- 1. jQuery -->
 <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
-<!-- 2. DataTables -->
 <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
-<!-- 3. Dashboard en premier, puis Comparateur -->
 <script src="/static/dashboard.js"></script>
 <script src="/static/compare.js"></script>
 </body>
