@@ -436,6 +436,5 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")
-        ETAT_ERREURS["n"] += 1
-        ETAT_ERREURS["derniere"] = f"{type(e).__name__}: {e}"[:160]
-        return None
+        # Au lieu d'utiliser ETAT_ERREURS ici, on renvoie un dictionnaire explicite
+        return {"erreur_ticker": ticker_symbol, "message": f"{type(e).__name__}: {e}"[:160]}
