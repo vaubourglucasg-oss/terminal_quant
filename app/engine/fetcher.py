@@ -4,6 +4,7 @@ import json
 import time
 import sqlite3
 import threading
+import hashlib
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -24,6 +25,30 @@ PRIMES_RISQUE_PAYS = {      # prime ajoutée au coût des fonds propres ; défau
     "United States": 0.00, "Switzerland": 0.00, "Germany": 0.00,
     "France": 0.004, "United Kingdom": 0.005, "Japan": 0.005, "China": 0.012, "India": 0.021,
 }
+HYP_DEFAUT = {"erp": 0.055, "g_term": 0.025, "rf": None, "ecart_g": 0.03, "ecart_ke": 0.01}
+
+
+def normaliser_hypotheses(brut=None):
+    """Hypothèses saisies dans l'interface (en %), converties en fractions et bornées."""
+    brut = brut if isinstance(brut, dict) else {}
+
+    def pct(cle, lo, hi):
+        v = _f(brut.get(cle))
+        return HYP_DEFAUT[cle] if v is None else min(hi, max(lo, v / 100.0))
+    rf = _f(brut.get("rf"))
+    return {"erp": pct("erp", 0.02, 0.10), "g_term": pct("g_term", 0.0, 0.04),
+            "rf": None if rf is None else min(0.15, max(0.0, rf / 100.0)),
+            "ecart_g": pct("ecart_g", 0.005, 0.08), "ecart_ke": pct("ecart_ke", 0.002, 0.04)}
+
+
+def cle_hypotheses(hyp):
+    """Vide pour les hypothèses par défaut (les caches existants restent valides), sinon une empreinte courte."""
+    arrondi = lambda h: {k: (None if v is None else round(v, 6)) for k, v in h.items()}
+    if arrondi(hyp) == arrondi(normaliser_hypotheses(None)):
+        return ""
+    return "|" + hashlib.md5(json.dumps(arrondi(hyp), sort_keys=True).encode()).hexdigest()[:8]
+
+
 # Taux sans risque par devise (fraction, ex. {"JPY": 0.012, "EUR": 0.028}). VIDE par défaut : tout est alors
 # actualisé avec le 10 ans américain, ce qui pénalise les marchés à taux bas (Japon, Suisse, zone euro).
 RF_LOCAL = {}
@@ -54,6 +79,7 @@ LIENS_MACRO = [("Gold", "Or"), ("Uranium", "Uranium"), ("Oil", "Pétrole WTI"), 
 # --------------------------------------------------------------------------- #
 _verrou = threading.Lock()
 _ttl = {}
+ETAT_ERREURS = {"n": 0, "derniere": ""}      # affiché dans l'interface quand Yahoo refuse ou limite les requêtes
 
 
 def _avec_ttl(cle, ttl, fabrique):
@@ -113,6 +139,21 @@ def charger_du_cache(ticker, date_str):
         return json.loads(row[0]) if row else None
     except Exception:
         return None
+
+
+def vider_cache():
+    """Vide le cache des analyses et la mémoire à durée de vie (macro, taux, change). Retourne le nombre de lignes."""
+    n = 0
+    try:
+        conn = sqlite3.connect(db_cache_path, timeout=30)
+        n = conn.execute("DELETE FROM cache_actions").rowcount
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Cache non vidé : {e}")
+    with _verrou:
+        _ttl.clear()
+    return n
 
 
 def sauvegarder_dans_cache(ticker, date_str, data):
@@ -209,9 +250,11 @@ def etiquette_macro(industrie, macro):
 # --------------------------------------------------------------------------- #
 # Analyse d'une action : métriques BRUTES uniquement (le scoring relatif est fait ensuite, sur l'ensemble)
 # --------------------------------------------------------------------------- #
-def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None):
+def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None):
     today = datetime.today().strftime("%Y-%m-%d")
-    cache = charger_du_cache(ticker_symbol, today)
+    hyp = hyp or normaliser_hypotheses(None)
+    cle_cache = ticker_symbol + cle_hypotheses(hyp)      # des hypothèses différentes = des résultats différents
+    cache = charger_du_cache(cle_cache, today)
     if cache is not None:
         if secteurs_cibles and cache.get("secteur") not in secteurs_cibles:
             return None
@@ -313,7 +356,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         # ---- coût du capital, rentabilité ----
         beta = mk["beta"] if mk["beta"] is not None else (_f(info.get("beta")) or 1.0)
         prime_pays = PRIMES_RISQUE_PAYS.get(info.get("country", "United States"), 0.02)
-        ke = mm.calculer_cout_capitaux(rf, beta, prime_pays)
+        ke = mm.calculer_cout_capitaux(rf, beta, prime_pays, hyp["erp"])
         kd = mm.calculer_cout_dette(rf, interets, dette0, nd_ebitda)
         wacc = mm.calculer_wacc(ke, kd, taux_is, cap, dette0) * 100 if cap else None
         roic = None if est_fin else mm.calculer_roic(ebit, taux_is, fonds_propres, dette0, cash0)
@@ -331,16 +374,16 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         div_yield = div * 100 if div is not None else None
 
         # ---- valeur intrinsèque ----
-        g_term = min(0.025, max(0.01, rf - 0.005))
+        g_term = min(hyp["g_term"], max(0.01, rf - 0.005))
         valo = {"bear": None, "base": None, "bull": None}
         g1 = part_vt = g_imp = None
         methode = None
         if fx_ok:
             if est_fin:
-                valo = mm.valorisation_financiere(roe, bvps, ke, g_term, prix)
+                valo = mm.valorisation_financiere(roe, bvps, ke, g_term, prix, hyp["ecart_ke"])
                 methode = "P/B justifié"
             elif fcf_base and fcf_base > 0 and actions:
-                r = mm.valorisation_dcf(fcf_base, actions, cagr_ca, cagr_fcf, ke, g_term, prix)
+                r = mm.valorisation_dcf(fcf_base, actions, cagr_ca, cagr_fcf, ke, g_term, prix, hyp["ecart_g"], hyp["ecart_ke"])
                 valo = {n: r[n] for n in ("bear", "base", "bull")}
                 g1, part_vt, g_imp = r["g1"], r["part_vt"], r["g_implicite"]
                 methode = "DCF"
@@ -389,8 +432,10 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             "macro": etiquette_macro(info.get("industry"), donnees_macro or {}), "alertes": alertes,
         }
         row = json_safe(row)
-        sauvegarder_dans_cache(ticker_symbol, today, row)
+        sauvegarder_dans_cache(cle_cache, today, row)
         return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")
+        ETAT_ERREURS["n"] += 1
+        ETAT_ERREURS["derniere"] = f"{type(e).__name__}: {e}"[:160]
         return None

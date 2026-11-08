@@ -214,3 +214,67 @@ td.t-g { white-space: nowrap; }
 .cmp-table tr.cmp-g th { padding: 12px 0 4px; font-size: .8rem; font-weight: 600; color: var(--marine); }
 #cmp-dlg .alertes { margin-top: 14px; }
 @media (max-width: 720px) { .cmp-tetes { margin-left: 0; } }
+
+/* ---------- Icônes d'aide (Tooltips débutants) ---------- */
+.icone-aide {
+  color: var(--marine);
+  font-size: 0.9em;
+  margin-left: 6px;
+  cursor: help;
+  opacity: 0.6;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.icone-aide:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* Ajustement pour que l'icône ne casse pas l'alignement des titres de colonnes */
+table.dataTable thead th span {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ============================================================================
+   PARAMÈTRES : densité, taille du texte, palette daltonien, fenêtre des réglages
+   ============================================================================ */
+html[data-dens="compacte"] table.dataTable tbody td { padding-top: 2px; padding-bottom: 2px; }
+html[data-dens="compacte"] .titre span { display: none; }
+html[data-dens="aeree"] table.dataTable tbody td { padding-top: 12px; padding-bottom: 12px; }
+
+html.daltonien { --vert: #4aa3ff; --vert-pale: rgba(74, 163, 255, .16); --rouge: #ffa24a; --rouge-pale: rgba(255, 162, 74, .16); }
+html.light-mode.daltonien { --vert: #0B6FBF; --vert-pale: #DCEBF8; --rouge: #B85A00; --rouge-pale: #F8E6D4; }
+
+#parametres .lien-bouton { width: 100%; text-align: left; }
+.prm-resume { margin: 6px 0 0; font-size: .8rem; color: var(--muted); }
+
+#prm-dlg { width: min(720px, 94vw); max-height: 92vh; padding: 0; border: 1px solid var(--trait); border-radius: 8px; background: var(--surface); color: var(--encre); }
+#prm-dlg::backdrop { background: rgba(0, 0, 0, .55); }
+.prm-in { padding: 18px 22px 0; position: relative; display: flex; flex-direction: column; max-height: 90vh; }
+.prm-in h2 { font-size: 1.15rem; margin-bottom: 12px; }
+.prm-onglets { display: flex; gap: 2px; border-bottom: 1px solid var(--trait); flex-wrap: wrap; }
+.prm-onglets button { font: inherit; font-size: .9rem; padding: 8px 14px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; }
+.prm-onglets button:hover { color: var(--encre); }
+.prm-onglets button[aria-selected=true] { color: var(--marine); border-bottom-color: var(--marine); font-weight: 600; }
+.prm-corps { overflow-y: auto; padding: 14px 2px 10px; display: flex; flex-direction: column; gap: 12px; min-height: 280px; }
+.prm-champ { display: grid; grid-template-columns: minmax(150px, 38%) 1fr; gap: 12px; align-items: center; font-size: .9rem; }
+.prm-champ > span:first-child { color: var(--muted); }
+.prm-champ select, .prm-champ input[type=number] { width: 100%; max-width: 280px; }
+.prm-rng { display: flex; align-items: center; gap: 12px; }
+.prm-rng input { flex: 1; max-width: 280px; accent-color: var(--marine); }
+.prm-rng output { min-width: 4.5em; text-align: right; font-weight: 600; }
+.prm-case { display: flex; gap: 8px; align-items: flex-start; font-size: .9rem; cursor: pointer; }
+.prm-case input { margin-top: 3px; accent-color: var(--marine); }
+.prm-cols { border: 1px solid var(--trait); border-radius: 6px; padding: 8px 12px 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; }
+.prm-cols legend { font-size: .8rem; color: var(--muted); padding: 0 6px; }
+.prm-grille { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 18px; }
+.prm-grille .prm-champ { grid-template-columns: 1fr; gap: 4px; }
+.prm-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .85rem; color: var(--muted); }
+.prm-note { margin: 0; font-size: .85rem; color: var(--muted); max-width: 70ch; }
+.prm-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.prm-fichier { display: inline-block; }
+.prm-pied { position: sticky; bottom: 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 0 16px; background: var(--surface); border-top: 1px solid var(--trait); font-size: .85rem; color: var(--muted); }
+#prm-attente { color: var(--ambre); }
+#prm-relancer { margin-left: auto; padding: 7px 14px; }
+@media (max-width: 640px) { .prm-champ { grid-template-columns: 1fr; gap: 4px; } }

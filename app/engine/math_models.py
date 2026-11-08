@@ -237,17 +237,17 @@ def croissance_implicite(prix, fcf0, actions, ke, g_terminal):
     return (lo + hi) / 2
 
 
-SCENARIOS = (("bear", -0.03, +0.01), ("base", 0.0, 0.0), ("bull", +0.03, -0.01))   # (nom, Δg, Δke)
+SCENARIOS = (("bear", -1), ("base", 0), ("bull", 1))   # multiplicateur des écarts : g + m·Δg, ke − m·Δke
 
 
-def valorisation_dcf(fcf0, actions, cagr_ca, cagr_fcf, ke, g_terminal, prix):
-    """Valeur par action en 3 scénarios (g ±3 pts, ke ∓1 pt) + DCF inversé + poids de la valeur terminale."""
+def valorisation_dcf(fcf0, actions, cagr_ca, cagr_fcf, ke, g_terminal, prix, dg=0.03, dk=0.01):
+    """Valeur par action en 3 scénarios (g ± dg, ke ∓ dk ; par défaut ±3 pts et ∓1 pt) + DCF inversé + poids de la valeur terminale."""
     g1 = croissance_retenue(cagr_ca, cagr_fcf, g_terminal)
     out = {"bear": None, "base": None, "bull": None, "g1": g1, "part_vt": None, "g_implicite": None}
     if not actions or actions <= 0:
         return out
-    for nom, dg, dk in SCENARIOS:
-        r = projeter_dcf(fcf0, g1 + dg, ke + dk, g_terminal)
+    for nom, mult in SCENARIOS:
+        r = projeter_dcf(fcf0, g1 + mult * dg, ke - mult * dk, g_terminal)
         if r:
             out[nom] = r[0] / actions
             if nom == "base":
@@ -264,13 +264,13 @@ def valeur_pb_justifie(roe, bvps, ke, g):
     return max((roe - g) / (ke - g), 0.0) * bvps
 
 
-def valorisation_financiere(roe, bvps, ke, g, prix):
+def valorisation_financiere(roe, bvps, ke, g, prix, dk=0.01):
     """Même logique 3 scénarios pour les financières, ROE ramené à 70/30 vers ke (ROE non durable)."""
     if roe is None:
         return {"bear": None, "base": None, "bull": None}
     roe_s = 0.7 * roe + 0.3 * ke
-    return {nom: valeur_pb_justifie(roe_s + dk * -2, bvps, ke + dk, g)
-            for nom, _dg, dk in SCENARIOS}
+    return {nom: valeur_pb_justifie(roe_s + 2 * mult * dk, bvps, ke - mult * dk, g)
+            for nom, mult in SCENARIOS}
 
 
 def valeur_graham(eps, bvps):

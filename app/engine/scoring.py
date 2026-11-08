@@ -35,9 +35,35 @@ METRIQUES = {
 TOUTES = sorted({c for t in METRIQUES.values() for f in t.values() for c, _ in f})
 SEUIL_SECTEUR = 8
 SEUIL_MIN_DONNEES = 5
+REGLAGES_DEFAUT = {"achat_fort": 90, "achat": 75, "vente": 20, "couverture_min": 50, "poids_secteur": 60}
 
 
-def _percentile(df, col, sens):
+def _borne(x, lo, hi, defaut):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return defaut
+    return defaut if x != x else min(hi, max(lo, x))
+
+
+def normaliser_reglages(brut=None):
+    """Réglages saisis dans l'interface (pondérations et seuils en %/points) -> valeurs bornées et cohérentes :
+    pondérations ramenées à une somme de 1, achat fort >= achat > vente. À n'appliquer qu'UNE fois sur les
+    réglages bruts ; calculer_scores attend le résultat."""
+    brut = brut if isinstance(brut, dict) else {}
+    pb = brut.get("poids") if isinstance(brut.get("poids"), dict) else {}
+    poids = {k: _borne(pb.get(k), 0, 100, POIDS[k] * 100) for k in POIDS}
+    total = sum(poids.values())
+    poids = {k: (v / total if total > 0 else POIDS[k]) for k, v in poids.items()}
+    achat = int(_borne(brut.get("achat"), 50, 99, REGLAGES_DEFAUT["achat"]))
+    return {"poids": poids, "achat": achat,
+            "achat_fort": int(max(achat, _borne(brut.get("achat_fort"), 50, 100, REGLAGES_DEFAUT["achat_fort"]))),
+            "vente": int(min(achat - 1, _borne(brut.get("vente"), 1, 60, REGLAGES_DEFAUT["vente"]))),
+            "couverture_min": _borne(brut.get("couverture_min"), 0, 100, REGLAGES_DEFAUT["couverture_min"]),
+            "poids_secteur": _borne(brut.get("poids_secteur"), 0, 100, REGLAGES_DEFAUT["poids_secteur"]) / 100}
+
+
+def _percentile(df, col, sens, w_sec=0.6):
     """Percentile 0-100 (rang centré (r−0,5)/n), mix secteur/univers ; NaN si < 5 valeurs dans l'univers."""
     s = pd.to_numeric(df[col], errors="coerce")
     n_uni = s.count()
@@ -47,16 +73,19 @@ def _percentile(df, col, sens):
     grp = df["secteur"]
     n_sec = s.groupby(grp).transform("count")
     p_sec = (s.groupby(grp).rank(method="average") - 0.5) / n_sec.replace(0, np.nan)
-    p = pd.Series(np.where(n_sec >= SEUIL_SECTEUR, 0.6 * p_sec + 0.4 * p_uni, p_uni), index=df.index)
+    p = pd.Series(np.where(n_sec >= SEUIL_SECTEUR, w_sec * p_sec + (1 - w_sec) * p_uni, p_uni), index=df.index)
     p = p.where(s.notna())
     return (p if sens > 0 else 1 - p) * 100
 
 
-def calculer_scores(lignes):
-    """lignes : liste de dicts (sorties de fetcher). Retourne {ticker: {score, valo, qual, crois, risq, mom,
+def calculer_scores(lignes, reglages=None):
+    """lignes : liste de dicts (sorties de fetcher). reglages : sortie de normaliser_reglages (défauts si None).
+    Retourne {ticker: {score, valo, qual, crois, risq, mom,
     signal, couverture, alertes_score}}."""
     if not lignes:
         return {}
+    reg = reglages or normaliser_reglages(None)
+    poids = reg["poids"]
     df = pd.DataFrame(lignes).reset_index(drop=True)
     for col in ["secteur", "est_fin", "piotroski", "piotroski_n", "mdd", "altman_zone", "marge_secu"]:
         if col not in df:
@@ -73,10 +102,10 @@ def calculer_scores(lignes):
 
     # percentiles de toutes les métriques utilisées
     sens_col = {c: s for t in METRIQUES.values() for f in t.values() for c, s in f}
-    pct = {c: _percentile(df, c, sens_col[c]) for c in TOUTES}
+    pct = {c: _percentile(df, c, sens_col[c], reg["poids_secteur"]) for c in TOUTES}
 
     facteurs, couverture = {}, pd.Series(0.0, index=df.index)
-    for f in POIDS:
+    for f in poids:
         vals = {}
         for type_ in ("std", "fin"):
             cols = [c for c, _ in METRIQUES[type_][f]]
@@ -89,8 +118,8 @@ def calculer_scores(lignes):
         couverture = couverture.where(~masque, dispo / len(cols) * 100)
 
     # score composite : un facteur sans aucune donnée est exclu (poids renormalisé), pas mis à 50
-    num = sum(facteurs[f].fillna(0) * w for f, w in POIDS.items())
-    den = sum(facteurs[f].notna() * w for f, w in POIDS.items())
+    num = sum(facteurs[f].fillna(0) * w for f, w in poids.items())
+    den = sum(facteurs[f].notna() * w for f, w in poids.items())
     composite = num / den.replace(0, np.nan)
     n = composite.count()
     if n >= 12:
@@ -100,7 +129,7 @@ def calculer_scores(lignes):
 
     res = {}
     for i, r in df.iterrows():
-        f = {k: (None if pd.isna(facteurs[k][i]) else int(round(facteurs[k][i]))) for k in POIDS}
+        f = {k: (None if pd.isna(facteurs[k][i]) else int(round(facteurs[k][i]))) for k in poids}
         v, q, ri = (50 if f[k] is None else f[k] for k in ("valo", "qual", "risq"))
         s = None if pd.isna(score[i]) else int(round(score[i]))
         cov = int(round(couverture[i]))
@@ -117,16 +146,16 @@ def calculer_scores(lignes):
             alertes.append("Bonne société mais valorisation tendue")
         if s is None:
             alertes.append("Classement impossible : moins de 5 titres comparables dans cet univers")
-        elif cov < 50:
+        elif cov < reg["couverture_min"]:
             alertes.append(f"Données incomplètes ({cov} % des métriques disponibles)")
 
-        if s is None or cov < 50:
+        if s is None or cov < reg["couverture_min"]:
             signal = "INSUFFISANT"
-        elif s >= 90 and v >= 50 and ri >= 40 and not detresse and (marge is None or marge > 0):
+        elif s >= reg["achat_fort"] and v >= 50 and ri >= 40 and not detresse and (marge is None or marge > 0):
             signal = "ACHAT FORT"
-        elif s >= 75 and ri >= 35 and not detresse and (marge is None or marge > -20):
+        elif s >= reg["achat"] and ri >= 35 and not detresse and (marge is None or marge > -20):
             signal = "ACHAT"
-        elif s <= 20 or ri <= 15 or detresse:
+        elif s <= reg["vente"] or ri <= 15 or detresse:
             signal = "VENTE"
         elif v <= 25 and s >= 60:
             signal = "CONSERVER (Trop chère)"

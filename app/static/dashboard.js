@@ -268,7 +268,8 @@ $(function () {
 
   // ---------- flux temps réel (SSE) ----------
   console.log("Tentative de connexion SSE vers:", CFG.indice);
-  const url = `/stream?indice=${encodeURIComponent(CFG.indice)}&secteur=${encodeURIComponent(CFG.secteur)}`;
+  const reglages = window.Reglages ? encodeURIComponent(JSON.stringify(window.Reglages.serveur())) : '';
+  const url = `/stream?indice=${encodeURIComponent(CFG.indice)}&secteur=${encodeURIComponent(CFG.secteur)}&r=${reglages}`;
   const src = new EventSource(url);
   
   src.addEventListener('init', e => { 
@@ -310,4 +311,7 @@ $(function () {
     src.close();
     $('#etat').text('Connexion interrompue : rechargez la page ou redémarrez le serveur Python.');
   };
+
+  // Exposé pour parametres.js (recalcul du classement, attente de la fin de l'analyse)
+  Object.assign(window.Quant, { src, majResume });
 });

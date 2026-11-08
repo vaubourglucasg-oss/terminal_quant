@@ -1,15 +1,21 @@
-/* theme.js — thème sombre / clair partagé par l'accueil et le tableau de bord.
+/* theme.js — thème sombre / clair / automatique, partagé par l'accueil et le tableau de bord.
    À charger dans le <head> des DEUX pages, AVANT la feuille de style si possible :
    la classe est posée sur <html> dès le départ, donc pas de flash sombre quand on a choisi le clair. */
 (function () {
   var CLE = 'quant_theme';
   var racine = document.documentElement;
+  var systeme = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
 
-  function lire() {
-    try { return localStorage.getItem(CLE) === 'light' ? 'light' : 'dark'; } catch (e) { return 'dark'; }
+  function preference() {
+    try { var v = localStorage.getItem(CLE); return v === 'light' || v === 'auto' ? v : 'dark'; } catch (e) { return 'dark'; }
+  }
+  function resolu(pref) {                               // 'auto' suit le réglage du système
+    if (pref === 'auto') return systeme && systeme.matches ? 'light' : 'dark';
+    return pref;
   }
 
-  function appliquer(t) {
+  function appliquer() {
+    var t = resolu(preference());
     racine.classList.toggle('light-mode', t === 'light');
     racine.style.colorScheme = t;                       // champs, barres de défilement, <dialog> natifs
     var icone = document.getElementById('themeIcon'), texte = document.getElementById('themeText');
@@ -22,17 +28,19 @@
     document.dispatchEvent(new CustomEvent('quant-theme', { detail: t }));
   }
 
-  function basculer() {
-    var suivant = lire() === 'light' ? 'dark' : 'light';
-    try { localStorage.setItem(CLE, suivant); } catch (e) { /* stockage indisponible */ }
-    appliquer(suivant);
+  function definir(pref) {
+    try { localStorage.setItem(CLE, pref); } catch (e) { /* stockage indisponible */ }
+    appliquer();
   }
+  function basculer() { definir(resolu(preference()) === 'light' ? 'dark' : 'light'); }   // le bouton choisit un thème explicite
 
-  window.Theme = { get: lire, set: function (t) { try { localStorage.setItem(CLE, t); } catch (e) {} appliquer(t); }, basculer: basculer };
+  // get() : thème réellement affiché (utilisé pour les iframes) ; pref() : choix enregistré (dark, light ou auto)
+  window.Theme = { get: function () { return resolu(preference()); }, pref: preference, set: definir, basculer: basculer };
 
-  appliquer(lire());                                    // tout de suite (le bouton n'existe pas encore)
+  if (systeme && systeme.addEventListener) systeme.addEventListener('change', function () { if (preference() === 'auto') appliquer(); });
+  appliquer();                                          // tout de suite (le bouton n'existe pas encore)
   document.addEventListener('DOMContentLoaded', function () {
-    appliquer(lire());                                  // met à jour icône et texte du bouton
+    appliquer();                                        // met à jour icône et texte du bouton
     var b = document.getElementById('themeToggleBtn');
     if (b) b.addEventListener('click', basculer);
   });
