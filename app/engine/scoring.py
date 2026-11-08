@@ -13,7 +13,7 @@ relatif à l'indice choisi, pas une valeur absolue.
 import numpy as np
 import pandas as pd
 
-POIDS = {"valo": 0.30, "qual": 0.25, "crois": 0.15, "risq": 0.15, "mom": 0.15}
+POIDS = {"valo": 0.35, "qual": 0.25, "crois": 0.15, "risq": 0.10, "mom": 0.15}
 
 # (colonne, sens) — sens +1 : plus haut = mieux ; −1 : plus bas = mieux
 METRIQUES = {
@@ -22,14 +22,14 @@ METRIQUES = {
         "qual": [("roic", 1), ("spread", 1), ("pio_ratio", 1), ("marge_op", 1)],
         "crois": [("cagr_ca", 1), ("cagr_fcf", 1)],
         "risq": [("nd_ebitda", -1), ("vol", -1), ("mdd_abs", -1), ("beta", -1), ("altman_niv", 1)],
-        "mom": [("mom_12_1", 1), ("dist_ma200", 1)],
+        "mom": [("mom_12_1", 1), ("dist_ma200", 1), ("dist_ma50", 1)],
     },
     "fin": {   # banques / assurances : FCF, EBITDA et dette nette n'ont pas de sens
         "valo": [("earn_yield", 1), ("marge_secu", 1), ("div_yield", 1)],
         "qual": [("roe", 1), ("roa", 1)],
         "crois": [("cagr_ca", 1)],
         "risq": [("vol", -1), ("mdd_abs", -1), ("beta", -1)],
-        "mom": [("mom_12_1", 1), ("dist_ma200", 1)],
+        "mom": [("mom_12_1", 1), ("dist_ma200", 1), ("dist_ma50", 1)],
     },
 }
 TOUTES = sorted({c for t in METRIQUES.values() for f in t.values() for c, _ in f})
@@ -137,7 +137,9 @@ def calculer_scores(lignes, reglages=None):
         detresse = r.get("altman_zone") == "détresse"
         marge = r.get("marge_secu")
         marge = None if marge is None or pd.isna(marge) else float(marge)
-
+        spread = r.get("spread")
+        spread = None if spread is None or pd.isna(spread) else float(spread)
+        
         if detresse:
             alertes.append("Zone de détresse (Altman) : risque de défaut élevé")
         if v >= 70 and q <= 30:
@@ -151,9 +153,9 @@ def calculer_scores(lignes, reglages=None):
 
         if s is None or cov < reg["couverture_min"]:
             signal = "INSUFFISANT"
-        elif s >= reg["achat_fort"] and v >= 50 and ri >= 40 and not detresse and (marge is None or marge > 0):
+        elif s >= reg["achat_fort"] and v >= 50 and ri >= 40 and not detresse and (marge is None or marge > 0) and (spread is None or spread >= 2):
             signal = "ACHAT FORT"
-        elif s >= reg["achat"] and ri >= 35 and not detresse and (marge is None or marge > -20):
+        elif s >= reg["achat"] and ri >= 35 and not detresse and (marge is None or marge > -20) and (spread is None or spread >= 0):
             signal = "ACHAT"
         elif s <= reg["vente"] or ri <= 15 or detresse:
             signal = "VENTE"
@@ -161,6 +163,7 @@ def calculer_scores(lignes, reglages=None):
             signal = "CONSERVER (Trop chère)"
         else:
             signal = "CONSERVER"
+
         res[r["ticker"]] = {"score": s, "valo": f["valo"], "qual": f["qual"], "crois": f["crois"],
                             "risq": f["risq"], "mom": f["mom"], "signal": signal,
                             "couverture": cov, "alertes_score": alertes}

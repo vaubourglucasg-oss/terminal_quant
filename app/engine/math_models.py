@@ -331,7 +331,7 @@ def metriques_marche(close, rf=0.0, bench=None):
     Sharpe/Sortino/RSI/bêta. Sans assez d'historique, les champs restent None (jamais 0 par défaut :
     avant, un prix > MA=0 donnait +50 points de momentum à un titre récent)."""
     cles = ("prix", "ma50", "ma200", "rsi", "vol", "mdd", "rdt_1a", "sharpe", "sortino",
-            "mom_12_1", "dist_ma200", "dist_52w", "beta")
+            "mom_12_1", "dist_ma200", "dist_ma50", "dist_52w", "beta")
     out = {k: None for k in cles}
     c = close.dropna() if close is not None else pd.Series(dtype=float)
     n = len(c)
@@ -340,6 +340,7 @@ def metriques_marche(close, rf=0.0, bench=None):
     out["prix"] = float(c.iloc[-1])
     if n >= 50:
         out["ma50"] = float(c.rolling(50).mean().iloc[-1])
+        out["dist_ma50"] = (out["prix"] / out["ma50"] - 1) * 100
     if n >= 200:
         out["ma200"] = float(c.rolling(200).mean().iloc[-1])
         out["dist_ma200"] = (out["prix"] / out["ma200"] - 1) * 100

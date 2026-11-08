@@ -4,7 +4,7 @@
   var CLE = 'quant_reglages_v1';
   var DEFAUT = {
     affichage: { densite: 'normale', texte: 100, lignes: 100, daltonien: false, masquees: [], resume: true, filtres: true },
-    score: { poids: { valo: 30, qual: 25, crois: 15, risq: 15, mom: 15 }, achat_fort: 90, achat: 75, vente: 20,
+    score: { poids: { valo: 35, qual: 25, crois: 15, risq: 10, mom: 15 }, achat_fort: 90, achat: 75, vente: 20,
              couverture_min: 50, poids_secteur: 60, exclure_fin: false },
     valo: { erp: 5.5, g_term: 2.5, rf: null, ecart_g: 3, ecart_ke: 1 },
     analyse: { concurrence: 6 }

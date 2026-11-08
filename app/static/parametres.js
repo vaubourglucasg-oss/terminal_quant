@@ -9,8 +9,9 @@ $(function () {
   const relanceInitiale = R.relance();
   let onglet = 'affichage', minuteur = null, enAttenteDeFin = false;
 
+  // Ligne ~9 : Ajoute l'index 15
   const COLONNES = [[2, 'Secteur'], [3, 'Cours'], [4, 'Score'], [5, 'Profil (barres)'], [6, 'Signal'], [7, 'Marge de sécurité'],
-    [8, 'Valeur estimée'], [9, 'ROIC − WACC'], [10, 'FCF yield'], [11, 'PER'], [12, 'Croissance CA 3 ans'], [13, 'Volatilité'], [14, 'Momentum 12-1']];
+    [8, 'Valeur estimée'], [9, 'ROIC − WACC'], [10, 'FCF yield'], [11, 'PER'], [12, 'Croissance CA 3 ans'], [13, 'Volatilité'], [14, 'Momentum 12-1'], [15, 'Mise à jour']];
   const FACTEURS = [['valo', 'Valorisation'], ['qual', 'Qualité'], ['crois', 'Croissance'], ['risq', 'Risque (sécurité)'], ['mom', 'Momentum']];
   const PROFILS = [['equilibre', 'Équilibré', [30, 25, 15, 15, 15]], ['value', 'Value', [45, 20, 10, 15, 10]], ['qualite', 'Qualité', [20, 40, 15, 15, 10]],
     ['croissance', 'Croissance', [20, 20, 35, 10, 15]], ['defensif', 'Défensif', [20, 25, 5, 40, 10]], ['momentum', 'Momentum', [15, 15, 15, 10, 45]]];

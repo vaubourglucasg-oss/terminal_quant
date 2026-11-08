@@ -97,7 +97,10 @@ $(function () {
     colNum('cagr_ca', 'Croiss. CA 3 ans', 'Croissance annuelle moyenne du chiffre d\'affaires sur 3 ans.', 1, ' %', classeSigne),
     colNum('vol', 'Volatilité', 'Volatilité annualisée sur 1 an.', 0, ' %'),
     colNum('mom_12_1', 'Momentum 12-1', 'Performance sur 12 mois en excluant le dernier mois.', 0, ' %', classeSigne),
-  ];
+    // Ajoute ceci tout à la fin de la constante COLONNES (juste avant l'export)
+    { data: 'maj', defaultContent: '', className: 't-g discret', title: 'Mise à jour',
+        render: (v, type) => type === 'display' ? esc(v) : v },
+    ];
 
   const COLS_EXPORT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
@@ -139,7 +142,7 @@ $(function () {
   $('.filtres input, .filtres select').on('input change', () => { $('.presets button').attr('aria-pressed', 'false'); table.draw(); });
 
   const PRESETS = {
-    decote: { '#f-marge': 15, '#f-per': 18, '#f-score': 55 },
+    decote: { '#f-marge': 15, '#f-per': 15, '#f-score': 60 }, // Anciens seuils plus stricts
     qualite: { '#f-roic': 12, '#f-pio': 6, '#f-score': 60 },
     dividende: { '#f-div': 3.5, '#f-pio': 5, '#f-altman': 'sain' },
     solidite: { '#f-pio': 7, '#f-altman': 'sain', '#f-score': 50 },

@@ -421,7 +421,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             "vol": mk["vol"], "mdd": mk["mdd"], "rdt_1a": mk["rdt_1a"], "sharpe": mk["sharpe"], "sortino": mk["sortino"],
             "beta": beta if (mk["beta"] is not None or info.get("beta")) else None,
             "beta_local": mk["beta"] is not None, "mom_12_1": mk["mom_12_1"],
-            "dist_ma200": mk["dist_ma200"], "dist_52w": mk["dist_52w"], "rsi": mk["rsi"],
+            "dist_ma200": mk["dist_ma200"],"dist_ma50": mk.get("dist_ma50"), "dist_52w": mk["dist_52w"], "rsi": mk["rsi"],
             # valeur intrinsèque
             "methode_valo": methode, "valo_bear": valo["bear"], "valo_base": valo["base"], "valo_bull": valo["bull"],
             "marge_secu": mm.marge_securite(valo["base"], prix),
