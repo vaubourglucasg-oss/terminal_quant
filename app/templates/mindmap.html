@@ -109,6 +109,12 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     <button type="button" class="mm-chip" data-type="ma" aria-pressed="true"><i class="mm-pt ma"></i>Rachats</button>
     <button type="button" class="mm-chip" data-type="supply" aria-pressed="true"><i class="mm-pt supply"></i>Chaîne de valeur</button>
   </div>
+  <div class="mm-groupe">
+    <label class="mm-lbl" for="mm-indice">Indice</label>
+    <select id="mm-indice" style="font:inherit;font-size:.88rem;padding:5px 8px;border:1px solid var(--trait);border-radius:4px;background:var(--papier);color:var(--encre);">
+      <option value="">Vue globale (Démo M&amp;A)</option>
+    </select>
+  </div>
 
   <div class="mm-annees" role="group" aria-label="Période des rachats">
     <span class="mm-lbl">Rachats de</span>
@@ -170,7 +176,7 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
 
   const LIBELLE_STATUT = { 'finalisé': 'finalisé', 'annulé': 'abandonné', 'participation': 'participation', 'annoncé': 'annoncé' };
   const CLE_STATUT = { 'finalisé': 'final', 'annulé': 'annule', 'participation': 'part', 'annoncé': 'annonce' };
-  const RAYON_SECTEURS = 300, MARGE = 26;
+  const RAYON_SECTEURS = 680, MARGE = 56;
 
   /* ======================================================================= *
    *  État, données et index
@@ -333,8 +339,16 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     if (!ids.length) return [];
     const p0 = cy.getElementById(parentId).position(), n = ids.length;
     const pts = ids.map((id, i) => {
-      const a = n === 1 ? dir : dir - ouverture / 2 + ouverture * i / (n - 1);
-      const rr = rayon + (n > 6 && i % 2 ? 40 : 0);
+      // Répartition sur plusieurs anneaux concentriques dès qu'il y a beaucoup de sociétés
+      const parAnneau = 10;
+      const anneau = Math.floor(i / parAnneau);
+      const idxDansAnneau = i % parAnneau;
+      const nbDansAnneau = Math.min(parAnneau, n - anneau * parAnneau);
+      const ouv = nbDansAnneau <= 3 ? Math.min(ouverture, 1.4) : Math.PI * 1.85;
+      const a = nbDansAnneau === 1
+        ? dir
+        : dir - ouv / 2 + ouv * idxDansAnneau / (nbDansAnneau - 1) + (anneau * 0.25);
+      const rr = rayon + anneau * 165 + (idxDansAnneau % 2 ? 38 : 0);
       return { id, x: p0.x + rr * Math.cos(a), y: p0.y + rr * Math.sin(a), r: N[id].taille / 2 };
     });
     relaxer(pts, occupes());
@@ -830,32 +844,53 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     } catch (e) { majSource(null, true); }
   }
 
-  async function demarrer() {
+  async function demarrer(indiceChoisi) {
     const erreur = $('#mm-erreur');
     if (typeof cytoscape === 'undefined') {
-      erreur.textContent = 'La bibliothèque Cytoscape.js n\'a pas pu être chargée (réseau ou bloqueur de contenu).'; erreur.classList.add('visible'); return;
+      erreur.textContent = 'La bibliothèque Cytoscape.js n\'a pas pu être chargée.'; erreur.classList.add('visible'); return;
     }
+    const params = new URLSearchParams(window.location.search);
+    const indice = indiceChoisi !== undefined ? indiceChoisi : (params.get('indice') || '');
+    $('#mm-source').textContent = indice ? `Chargement de ${indice}…` : 'Chargement…';
+
     let data;
     try {
-      const rep = await fetch('/api/mindmap-data');
+      const urlApi = indice ? `/api/mindmap-data?indice=${encodeURIComponent(indice)}` : '/api/mindmap-data';
+      const rep = await fetch(urlApi);
       if (!rep.ok) throw new Error('HTTP ' + rep.status);
       data = await rep.json();
     } catch (e) {
-      erreur.textContent = 'Impossible de charger les données (/api/mindmap-data). Vérifiez que le routeur est bien inclus dans main.py.';
+      erreur.textContent = 'Impossible de charger les données (/api/mindmap-data).';
       erreur.classList.add('visible'); return;
     }
+
+    // Remplit le menu déroulant des indices disponibles
+    const selIndice = $('#mm-indice');
+    if (selIndice && data.meta && data.meta.indices_disponibles) {
+      selIndice.innerHTML = '<option value="">Vue globale (Démo M&amp;A)</option>'
+        + data.meta.indices_disponibles.map(ind => `<option value="${esc(ind)}"${ind === indice ? ' selected' : ''}>${esc(ind)}</option>`).join('');
+    }
+
+    if (cy) { cy.destroy(); cy = null; }
+    etat.secteurs.clear(); etat.focus = null; etat.depart = null; etat.cheminAffiche = false; fermerFiche();
+
     appliquerDonnees(data);
     indexer(data);
     lireCouleurs();
     creerCarte();
-    brancherCommandes();
+    if (!window._mmCommandesInit) { brancherCommandes(); window._mmCommandesInit = true; }
 
     const liste = $('#mm-liste');
     liste.innerHTML = Object.keys(N).map(i => N[i]).filter(n => n.type === 'societe')
       .map(n => '<option value="' + esc(n.nom + (n.ticker ? ' (' + n.ticker + ')' : '')) + '"></option>').join('');
 
-    poserSecteurs(); appliquerFiltres(); recadrer(); majSource(data.meta, false);
-    chargerEnDirect();
+    poserSecteurs();
+    // Si un indice complet est sélectionné, on déploie automatiquement ses secteurs pour tout voir d'un coup !
+    if (indice) {
+      data.secteurs.forEach(s => deployerSecteur(s.id, false));
+    }
+    appliquerFiltres(); recadrer(); majSource(data.meta, false);
+    if (!indice) chargerEnDirect();
   }
 
   window.CarteMA = { get cy() { return cy; }, etat, N: () => N, allerA, deployerSecteur, revelerVoisins, plusCourtChemin, calculerChemin,
