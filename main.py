@@ -3,6 +3,9 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from app.api.screener import router as api_router
+from app.api.mindmap_routes import router as mindmap_router  # juste sous l'import de api_router
+...
+app.include_router(mindmap_router)
 
 app = FastAPI(
     title="Terminal Quantitatif SaaS",

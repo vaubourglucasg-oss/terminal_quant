@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carte économique et M&amp;A — Terminal quantitatif</title>
+<script src="/static/theme.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* Carte mentale : n'utilise que les variables de style.css (--papier, --surface, --encre, --marine...), donc suit
+   le thème clair / sombre. Tous les sélecteurs sont préfixés mm- : aucune interférence avec le reste de l'app. */
+html, body { height: 100%; }
+body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; overflow: hidden; }
+
+.mm-barre { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--trait); position: relative; z-index: 6; }
+.mm-retour { font-size: .88rem; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.mm-retour:hover { color: var(--encre); }
+.mm-titre { font-size: 1rem; white-space: nowrap; }
+.mm-groupe { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mm-lbl { font-size: .78rem; color: var(--muted); margin-right: 2px; white-space: nowrap; }
+.mm-chip { font: inherit; font-size: .82rem; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--trait); border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.mm-chip:hover { border-color: var(--muted); }
+.mm-chip[aria-pressed=true] { color: var(--encre); border-color: var(--marine); background: var(--marine-pale); }
+.mm-pt { width: 16px; height: 0; border-top: 2px solid currentColor; display: inline-block; }
+.mm-pt.conc { border-top: 2px dashed var(--rouge); }
+.mm-pt.ma { border-top: 2px solid var(--vert); }
+.mm-pt.supply { border-top: 2px solid var(--marine); opacity: .6; }
+.mm-chip[aria-pressed=false] .mm-pt { opacity: .3; }
+.mm-annees { display: flex; align-items: center; gap: 8px; font-size: .82rem; color: var(--muted); }
+.mm-annees input[type=range] { width: 84px; accent-color: var(--marine); }
+.mm-annees output { min-width: 2.6em; color: var(--encre); font-weight: 600; }
+.mm-recherche { position: relative; }
+.mm-recherche input { font: inherit; font-size: .9rem; width: 220px; padding: 6px 10px; border: 1px solid var(--trait); border-radius: 4px; background: var(--papier); color: var(--encre); }
+.mm-recherche input[aria-invalid=true] { border-color: var(--rouge); }
+.mm-pousse { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mm-source { font-size: .78rem; padding: 3px 8px; border-radius: 3px; white-space: nowrap; background: var(--ambre-pale); color: var(--ambre); }
+.mm-source.direct { background: var(--vert-pale); color: var(--vert); }
+.mm-barre .lien-bouton[aria-pressed=true] { background: var(--marine); border-color: var(--marine); color: var(--papier); }
+
+.mm-scene { position: relative; overflow: hidden; min-height: 0; }
+#mm-cy { position: absolute; inset: 0; background: var(--papier); }
+.mm-erreur { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted); z-index: 3; }
+.mm-erreur.visible { display: flex; }
+
+.mm-bandeau { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 4; max-width: min(760px, calc(100% - 24px)); display: none; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--marine); border-radius: 6px; font-size: .88rem; }
+.mm-bandeau.visible { display: flex; }
+.mm-bandeau em { color: var(--muted); font-style: normal; }
+.mm-bandeau button { font: inherit; font-size: .8rem; padding: 3px 9px; border: 1px solid var(--trait); border-radius: 4px; background: transparent; color: var(--encre); cursor: pointer; white-space: nowrap; }
+
+.mm-legende { position: absolute; left: 12px; bottom: 12px; z-index: 3; padding: 10px 12px; background: var(--surface); border: 1px solid var(--trait); border-radius: 6px; font-size: .78rem; color: var(--muted); display: grid; gap: 5px; max-width: 250px; }
+.mm-legende div { display: flex; align-items: center; gap: 8px; }
+.mm-legende .mm-pt { flex: none; }
+.mm-rond { width: 11px; height: 11px; border-radius: 50%; border: 2.5px solid; display: inline-block; flex: none; }
+.mm-rond.h { border-color: var(--vert); } .mm-rond.b { border-color: var(--rouge); } .mm-rond.p { border-color: var(--muted); }
+.mm-rond.sat { border: 1.5px dashed var(--muted); }
+
+#mm-mini { position: absolute; right: 12px; bottom: 12px; z-index: 3; width: 200px; height: 140px; background: var(--surface); border: 1px solid var(--trait); border-radius: 6px; cursor: crosshair; }
+.mm-scene.avec-fiche #mm-mini { right: calc(min(380px, 100% - 24px) + 24px); }
+
+#mm-tip { position: absolute; top: 0; left: 0; z-index: 5; max-width: 280px; padding: 8px 10px; background: var(--surface); color: var(--encre); border: 1px solid var(--trait); border-radius: 6px; font-size: .82rem; pointer-events: none; line-height: 1.4; }
+#mm-tip[hidden] { display: none; }
+#mm-tip .mm-meta { color: var(--muted); }
+
+/* fiche latérale : légèrement translucide, sans lueur ni dégradé */
+#mm-fiche { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 4; width: min(380px, calc(100% - 24px)); overflow-y: auto; background: var(--surface); background: color-mix(in srgb, var(--surface) 94%, transparent);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid var(--trait); border-radius: 8px; padding: 16px 18px 18px;
+  transform: translateX(calc(100% + 24px)); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s; }
+#mm-fiche.ouverte { transform: none; visibility: visible; transition: transform .22s ease; }
+#mm-fiche h2 { font-size: 1.15rem; padding-right: 28px; }
+.mm-fermer { position: absolute; top: 10px; right: 12px; font: inherit; font-size: 1.4rem; line-height: 1; background: none; border: 0; color: var(--muted); cursor: pointer; }
+.mm-ticker { display: inline-block; margin-top: 4px; font-size: .78rem; padding: 1px 7px; border: 1px solid var(--trait); border-radius: 3px; color: var(--muted); }
+.mm-role { margin: 8px 0 0; color: var(--muted); font-size: .88rem; }
+.mm-fiche-grille { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; margin: 14px 0 4px; }
+.mm-fiche-grille div { padding: 5px 0; border-bottom: 1px dotted var(--trait); }
+.mm-fiche-grille dt { font-size: .76rem; color: var(--muted); }
+.mm-fiche-grille dd { margin: 0; font-weight: 600; }
+.mm-demo { font-weight: 400; font-size: .7rem; color: var(--ambre); margin-left: 4px; }
+#mm-fiche h3 { font-size: .85rem; color: var(--marine); margin: 16px 0 6px; }
+#mm-fiche ul { list-style: none; margin: 0; padding: 0; }
+#mm-fiche li { padding: 4px 0; border-bottom: 1px dotted var(--trait); font-size: .88rem; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+#mm-fiche .mm-meta { color: var(--muted); font-size: .78rem; text-align: right; }
+#mm-fiche .annule .mm-meta { text-decoration: line-through; text-decoration-color: var(--rouge); }
+.mm-lien { font: inherit; font-size: .88rem; padding: 0; border: 0; background: none; color: var(--marine); cursor: pointer; text-align: left; }
+.mm-lien:hover { text-decoration: underline; }
+.mm-pastilles { letter-spacing: 1px; color: var(--rouge); font-size: .7rem; }
+.mm-pastilles i { font-style: normal; color: var(--trait); }
+.mm-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; align-items: center; }
+.mm-actions .bouton { margin-left: 0; text-decoration: none; display: inline-block; }
+.mm-hors { font-size: .82rem; color: var(--muted); }
+.mm-note { font-size: .78rem; color: var(--muted); margin: 14px 0 0; }
+@media (max-width: 720px) { .mm-recherche input { width: 150px; } .mm-legende { display: none; } }
+</style>
+</head>
+<body class="mm">
+<header class="mm-barre">
+  <a class="mm-retour" href="/"><i class="fa-solid fa-arrow-left"></i> Terminal</a>
+  <h1 class="mm-titre">Carte économique et M&amp;A</h1>
+
+  <div class="mm-recherche">
+    <input id="mm-q" type="search" list="mm-liste" placeholder="Ticker ou société…" autocomplete="off" spellcheck="false" aria-label="Rechercher une société">
+    <datalist id="mm-liste"></datalist>
+  </div>
+  <button type="button" class="lien-bouton" id="mm-chemin" aria-pressed="false" title="Choisissez deux sociétés : le chemin le plus court entre elles est mis en évidence">Trouver la connexion</button>
+
+  <div class="mm-groupe" role="group" aria-label="Types de liens">
+    <span class="mm-lbl">Liens</span>
+    <button type="button" class="mm-chip" data-type="concurrence" aria-pressed="true"><i class="mm-pt conc"></i>Concurrence</button>
+    <button type="button" class="mm-chip" data-type="ma" aria-pressed="true"><i class="mm-pt ma"></i>Rachats</button>
+    <button type="button" class="mm-chip" data-type="supply" aria-pressed="true"><i class="mm-pt supply"></i>Chaîne de valeur</button>
+  </div>
+
+  <div class="mm-annees" role="group" aria-label="Période des rachats">
+    <span class="mm-lbl">Rachats de</span>
+    <input type="range" id="mm-amin" aria-label="Année de début"><output id="mm-omin"></output>
+    <span class="mm-lbl">à</span>
+    <input type="range" id="mm-amax" aria-label="Année de fin"><output id="mm-omax"></output>
+  </div>
+
+  <div class="mm-groupe" role="group" aria-label="Taille des sociétés">
+    <span class="mm-lbl">Taille</span>
+    <button type="button" class="mm-chip" data-taille="mega" aria-pressed="true" title="Plus de 200 Md$">Mega</button>
+    <button type="button" class="mm-chip" data-taille="large" aria-pressed="true" title="10 à 200 Md$">Large</button>
+    <button type="button" class="mm-chip" data-taille="mid" aria-pressed="true" title="Moins de 10 Md$">Mid</button>
+  </div>
+
+  <div class="mm-pousse">
+    <span id="mm-source" class="mm-source" role="status">Données de démonstration</span>
+    <button type="button" class="lien-bouton" id="mm-recadrer">Recadrer</button>
+    <button type="button" class="lien-bouton" id="mm-reset">Réinitialiser la vue</button>
+    <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème"><i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span></button>
+  </div>
+</header>
+
+<div class="mm-scene" id="mm-scene">
+  <div id="mm-cy" aria-label="Carte interactive des secteurs, sociétés et liens"></div>
+  <div class="mm-erreur" id="mm-erreur" role="alert"></div>
+  <div class="mm-bandeau" id="mm-bandeau" role="status"><span id="mm-bandeau-txt"></span><button type="button" id="mm-bandeau-x">Effacer</button></div>
+
+  <div class="mm-legende" aria-label="Légende">
+    <div><i class="mm-pt conc"></i>Concurrence directe (épaisseur = intensité)</div>
+    <div><i class="mm-pt ma"></i>Rachat, acquéreur vers cible (pointillé : abandonné)</div>
+    <div><i class="mm-pt supply"></i>Fournisseur vers client</div>
+    <div><i class="mm-rond h"></i><i class="mm-rond b"></i>Bordure : performance depuis le 1er janvier</div>
+    <div><i class="mm-rond p"></i>Taille : capitalisation (racine carrée)</div>
+    <div><i class="mm-rond sat"></i>Société rachetée ou cible</div>
+  </div>
+
+  <canvas id="mm-mini" aria-hidden="true"></canvas>
+  <div id="mm-tip" hidden></div>
+  <aside id="mm-fiche" aria-label="Fiche de la société" aria-hidden="true"></aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* ======================================================================= *
+   *  Utilitaires
+   * ======================================================================= */
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const norm = s => String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const nf0 = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
+  const nf1 = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
+  const md = v => (v == null ? 'montant non communiqué' : (v >= 100 ? nf0.format(v) : nf1.format(v)) + '\u202fMd$');
+  const pct = v => (v == null ? '–' : (v > 0 ? '+' : '') + nf1.format(v) + '\u202f%');
+  const reduit = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  const LIBELLE_STATUT = { 'finalisé': 'finalisé', 'annulé': 'abandonné', 'participation': 'participation', 'annoncé': 'annoncé' };
+  const CLE_STATUT = { 'finalisé': 'final', 'annulé': 'annule', 'participation': 'part', 'annoncé': 'annonce' };
+  const RAYON_SECTEURS = 300, MARGE = 26;
+
+  /* ======================================================================= *
+   *  État, données et index
+   * ======================================================================= */
+  let DATA = null, cy = null, COL = {};
+  let N = {}, ADJ = {}, ANNEES = [2000, new Date().getFullYear()];
+  const etat = {
+    types: { concurrence: true, ma: true, supply: true },
+    tailles: { mega: true, large: true, mid: true },
+    amin: 2000, amax: new Date().getFullYear(),
+    secteurs: new Set(),          // secteurs déployés
+    focus: null, modeChemin: false, depart: null, cheminAffiche: false, fiche: null
+  };
+
+  function calculer(n) {          // grandeurs dérivées des données (taille, tendance, catégorie)
+    if (n.type === 'secteur') { n.taille = 96; return; }
+    if (n.satellite) { n.taille = 22; n.tend = 'nd'; n.cat = null; return; }
+    const cap = n.cap || 0;
+    n.taille = Math.round(22 + 74 * Math.sqrt(Math.min(cap, 4500) / 4500));
+    n.tend = n.ytd == null ? 'nd' : (n.ytd >= 2 ? 'haus' : (n.ytd <= -2 ? 'baisse' : 'plat'));
+    n.cat = cap >= 200 ? 'mega' : (cap >= 10 ? 'large' : 'mid');
+  }
+
+  function indexer(data) {
+    N = {}; ADJ = {};
+    data.secteurs.forEach(s => { N[s.id] = { id: s.id, type: 'secteur', nom: s.nom }; });
+    data.noeuds.forEach(n => { N[n.id] = Object.assign({ type: 'societe' }, n); });
+    data.liens.forEach(l => {
+      (ADJ[l.source] = ADJ[l.source] || []).push({ autre: l.cible, lien: l });
+      (ADJ[l.cible] = ADJ[l.cible] || []).push({ autre: l.source, lien: l });
+    });
+    Object.keys(N).forEach(k => calculer(N[k]));
+    const annees = data.liens.filter(l => l.type === 'ma').map(l => l.annee);
+    ANNEES = [Math.min.apply(null, annees), Math.max(new Date().getFullYear(), Math.max.apply(null, annees))];
+    etat.amin = ANNEES[0]; etat.amax = ANNEES[1];
+  }
+
+  const lienActif = l => !!etat.types[l.type] && (l.type !== 'ma' || (l.annee >= etat.amin && l.annee <= etat.amax));
+
+  /* ======================================================================= *
+   *  Couleurs (lues dans les variables CSS du thème) et style Cytoscape
+   * ======================================================================= */
+  function lireCouleurs() {
+    const cs = getComputedStyle(document.documentElement);
+    const g = (nom, defaut) => (cs.getPropertyValue(nom) || '').trim() || defaut;
+    COL = { papier: g('--papier', '#131312'), surface: g('--surface', '#1a1a18'), encre: g('--encre', '#ebe9e4'),
+            muted: g('--muted', '#918e86'), trait: g('--trait', '#2c2b28'), accent: g('--marine', '#86b4c9'),
+            vert: g('--vert', '#78c19c'), rouge: g('--rouge', '#dc7f77'), ambre: g('--ambre', '#d6a84f') };
+  }
+
+  function construireStyle() {
+    return [
+      { selector: 'node', style: {
+        'label': 'data(label)', 'font-family': 'IBM Plex Sans, system-ui, sans-serif', 'font-size': 11, 'color': COL.encre,
+        'text-valign': 'bottom', 'text-margin-y': 5, 'text-wrap': 'wrap', 'text-max-width': 96,
+        'text-outline-color': COL.papier, 'text-outline-width': 3, 'text-outline-opacity': 1,
+        'width': 'data(taille)', 'height': 'data(taille)', 'background-color': COL.surface,
+        'border-width': 3, 'border-color': COL.muted, 'overlay-opacity': 0, 'min-zoomed-font-size': 6,
+        'underlay-color': COL.muted, 'underlay-opacity': 0.1, 'underlay-padding': 5, 'underlay-shape': 'ellipse' } },
+      { selector: 'node[type = "secteur"]', style: {
+        'text-valign': 'center', 'text-halign': 'center', 'font-size': 13, 'font-weight': 600, 'text-max-width': 82,
+        'background-color': COL.accent, 'background-opacity': 0.14, 'border-color': COL.accent, 'border-width': 2,
+        'underlay-opacity': 0, 'text-outline-width': 0 } },
+      { selector: 'node[tend = "haus"]', style: { 'border-color': COL.vert, 'underlay-color': COL.vert } },
+      { selector: 'node[tend = "baisse"]', style: { 'border-color': COL.rouge, 'underlay-color': COL.rouge } },
+      { selector: 'node[tend = "plat"]', style: { 'border-color': COL.ambre, 'underlay-color': COL.ambre } },
+      { selector: 'node[?prive]', style: { 'border-style': 'double', 'border-width': 6 } },
+      { selector: 'node[?satellite]', style: {
+        'background-opacity': 0, 'border-style': 'dashed', 'border-width': 1.5, 'border-color': COL.muted,
+        'color': COL.muted, 'font-size': 10, 'underlay-opacity': 0 } },
+      { selector: 'node:selected', style: { 'border-width': 5, 'underlay-opacity': 0.28 } },
+
+      { selector: 'edge', style: {
+        'curve-style': 'bezier', 'width': 'data(epaisseur)', 'line-color': COL.muted, 'opacity': 0.85,
+        'target-arrow-shape': 'none', 'overlay-opacity': 0, 'line-cap': 'round' } },
+      { selector: 'edge[type = "struct"]', style: { 'curve-style': 'straight', 'line-color': COL.muted, 'opacity': 0.3 } },
+      { selector: 'edge[type = "concurrence"]', style: { 'line-style': 'dashed', 'line-dash-pattern': [7, 4], 'line-color': COL.rouge } },
+      { selector: 'edge[type = "ma"]', style: { 'line-color': COL.vert, 'target-arrow-color': COL.vert, 'target-arrow-shape': 'triangle', 'arrow-scale': 1.1 } },
+      { selector: 'edge[type = "ma"][statut = "annule"]', style: { 'line-style': 'dotted', 'opacity': 0.6 } },
+      { selector: 'edge[type = "ma"][statut = "part"]', style: { 'target-arrow-shape': 'circle' } },
+      { selector: 'edge[type = "ma"][statut = "annonce"]', style: { 'line-style': 'dashed', 'line-dash-pattern': [3, 3] } },
+      { selector: 'edge[type = "supply"]', style: { 'line-color': COL.accent, 'target-arrow-color': COL.accent, 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, 'opacity': 0.5 } },
+      { selector: 'edge.survol', style: { 'opacity': 1 } },
+
+      { selector: '.masque, .hors-focus', style: { 'display': 'none' } },
+      { selector: '.terne', style: { 'opacity': 0.1 } },
+      { selector: 'node.chemin', style: { 'opacity': 1, 'border-width': 5, 'underlay-opacity': 0.3 } },
+      { selector: 'edge.chemin', style: { 'opacity': 1, 'width': 5 } }
+    ];
+  }
+
+  /* ======================================================================= *
+   *  Éléments Cytoscape
+   * ======================================================================= */
+  function donneeNoeud(n) {
+    return { id: n.id, label: n.nom, type: n.type, taille: n.taille, tend: n.tend || 'nd', cat: n.cat || '',
+             satellite: !!n.satellite, prive: !!n.prive, secteur: n.secteur || '' };
+  }
+  function donneeArete(l) {
+    const ep = l.type === 'concurrence' ? 1.2 + 0.8 * (l.intensite || 1) : (l.type === 'ma' ? (l.statut === 'annulé' ? 1.8 : 2.4) : 1.6);
+    return { id: l.id, source: l.source, target: l.cible, type: l.type, statut: CLE_STATUT[l.statut] || '', epaisseur: ep };
+  }
+  const present = id => cy.getElementById(id).nonempty();
+
+  function syncAretes() {
+    const ajout = [];
+    DATA.liens.forEach(l => {
+      if (present(l.id) || !present(l.source) || !present(l.cible)) return;
+      ajout.push({ group: 'edges', data: donneeArete(l) });
+    });
+    if (ajout.length) cy.add(ajout);
+  }
+
+  function appliquerFiltres() {
+    cy.batch(() => {
+      cy.nodes().forEach(n => {
+        const d = n.data();
+        if (d.type === 'societe' && !d.satellite) n.toggleClass('masque', !etat.tailles[d.cat]);
+      });
+      const cache = x => !x.data('satellite') && x.hasClass('masque');
+      cy.edges().forEach(e => {
+        const d = e.data();
+        if (d.type === 'struct') return;
+        const l = DATA.liensParId[d.id];
+        e.toggleClass('masque', !(l && lienActif(l)) || cache(e.source()) || cache(e.target()));
+      });
+      cy.nodes().forEach(n => {                 // une société rachetée sans aucun lien visible disparaît aussi
+        if (n.data('satellite')) n.toggleClass('masque', n.connectedEdges().filter(e => !e.hasClass('masque')).empty());
+      });
+    });
+    dessinerMini();
+  }
+
+  /* ======================================================================= *
+   *  Placement : éventail autour du parent, puis relaxation anti-chevauchement
+   * ======================================================================= */
+  function occupes() {
+    return cy.nodes().filter(n => !n.hasClass('masque')).map(n => { const p = n.position(); return { x: p.x, y: p.y, r: n.data('taille') / 2 }; });
+  }
+
+  function relaxer(pts, fixes) {
+    const pousser = (p, q, k) => {
+      const dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy) || 0.01, min = p.r + q.r + MARGE;
+      if (d >= min) return false;
+      const f = (min - d) * k / d;
+      p.x += dx * f; p.y += dy * f;
+      return true;
+    };
+    for (let it = 0; it < 80; it++) {
+      let bouge = false;
+      pts.forEach(p => {
+        fixes.forEach(q => { if (pousser(p, q, 1)) bouge = true; });
+        pts.forEach(q => { if (q !== p && pousser(p, q, 0.5)) bouge = true; });
+      });
+      if (!bouge) break;
+    }
+  }
+
+  function ajouterAutour(ids, parentId, dir, rayon, ouverture, animer) {
+    if (!ids.length) return [];
+    const p0 = cy.getElementById(parentId).position(), n = ids.length;
+    const pts = ids.map((id, i) => {
+      const a = n === 1 ? dir : dir - ouverture / 2 + ouverture * i / (n - 1);
+      const rr = rayon + (n > 6 && i % 2 ? 40 : 0);
+      return { id, x: p0.x + rr * Math.cos(a), y: p0.y + rr * Math.sin(a), r: N[id].taille / 2 };
+    });
+    relaxer(pts, occupes());
+    const anime = animer && !reduit;
+    cy.add(pts.map(p => ({ group: 'nodes', data: donneeNoeud(N[p.id]), position: anime ? { x: p0.x, y: p0.y } : { x: p.x, y: p.y } })));
+    if (anime) pts.forEach(p => cy.getElementById(p.id).animate({ position: { x: p.x, y: p.y } }, { duration: 450, easing: 'ease-out-cubic' }));
+    return pts;
+  }
+
+  function cadrerPoints(points, zoomMax) {
+    if (!points.length) return;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    points.forEach(p => { x1 = Math.min(x1, p.x - p.r); y1 = Math.min(y1, p.y - p.r); x2 = Math.max(x2, p.x + p.r); y2 = Math.max(y2, p.y + p.r); });
+    const w = Math.max(cy.width(), 100), h = Math.max(cy.height(), 100);
+    const z = Math.min(zoomMax || 1.15, Math.max(cy.minZoom(), Math.min(w / (x2 - x1 + 220), h / (y2 - y1 + 220))));
+    const cible = { zoom: z, pan: { x: w / 2 - (x1 + x2) / 2 * z, y: h / 2 - (y1 + y2) / 2 * z } };
+    if (reduit) { cy.zoom(cible.zoom); cy.pan(cible.pan); } else cy.animate(cible, { duration: 500, easing: 'ease-in-out' });
+  }
+  const pointDe = id => { const p = cy.getElementById(id).position(); return { x: p.x, y: p.y, r: N[id].taille / 2 }; };
+
+  /* ======================================================================= *
+   *  Drill-down : secteur → sociétés → voisins (concurrents, rachats, fournisseurs)
+   * ======================================================================= */
+  function poserSecteurs() {
+    const secs = DATA.secteurs;
+    cy.add(secs.map((s, i) => {
+      const a = -Math.PI / 2 + 2 * Math.PI * i / secs.length;
+      return { group: 'nodes', data: donneeNoeud(N[s.id]), position: { x: RAYON_SECTEURS * Math.cos(a), y: RAYON_SECTEURS * Math.sin(a) } };
+    }));
+  }
+
+  function deployerSecteur(sid, animer) {
+    if (etat.secteurs.has(sid) || !present(sid)) return;
+    quitterFocus();
+    etat.secteurs.add(sid);
+    const ids = DATA.noeuds.filter(n => n.secteur === sid && !n.satellite).map(n => n.id);
+    const pos = cy.getElementById(sid).position();
+    const manquants = ids.filter(id => !present(id));
+    const pts = ajouterAutour(manquants, sid, Math.atan2(pos.y, pos.x), 150 + 22 * ids.length, Math.min(Math.PI * 1.7, 0.42 * ids.length), animer);
+    cy.add(ids.filter(id => !present('s_' + id)).map(id => ({ group: 'edges', data: { id: 's_' + id, source: sid, target: id, type: 'struct', epaisseur: 1 } })));
+    syncAretes(); appliquerFiltres();
+    if (animer) cadrerPoints(pts.concat([pointDe(sid)]));
+  }
+
+  function replier(sid) {
+    quitterFocus(); effacerChemin();
+    etat.secteurs.delete(sid);
+    cy.nodes().filter(n => n.data('type') === 'societe' && !n.data('satellite') && n.data('secteur') === sid).remove();
+    cy.nodes().filter(n => n.data('satellite') && n.connectedEdges().filter(e => e.data('type') !== 'struct').empty()).remove();
+    if (etat.fiche && !present(etat.fiche)) fermerFiche();
+    if (etat.depart && !present(etat.depart)) etat.depart = null;
+    appliquerFiltres();
+  }
+
+  function revelerVoisins(id, animer) {
+    if (!present(id)) return;
+    const manquants = [];
+    (ADJ[id] || []).forEach(({ autre, lien }) => {
+      if (lienActif(lien) && !present(autre) && manquants.indexOf(autre) < 0) manquants.push(autre);
+    });
+    if (!manquants.length) return;
+    const pos = cy.getElementById(id).position();
+    const pts = ajouterAutour(manquants, id, Math.atan2(pos.y, pos.x), 140 + 16 * manquants.length, Math.min(Math.PI * 1.8, 0.5 * manquants.length), animer);
+    syncAretes(); appliquerFiltres();
+    if (animer) cadrerPoints(pts.concat([pointDe(id)]));
+  }
+
+  // rend une société visible sans animation (recherche, chemin) ; retourne true si quelque chose a été ajouté
+  function assurer(id) {
+    if (!N[id] || present(id)) return false;
+    quitterFocus();
+    const n = N[id];
+    if (n.satellite) {
+      const acq = (ADJ[id] || []).map(a => a.autre).filter(x => N[x] && !N[x].satellite)[0];
+      if (acq) { assurer(acq); revelerVoisins(acq, false); }
+    } else if (n.secteur) {
+      deployerSecteur(n.secteur, false);
+    }
+    syncAretes(); appliquerFiltres();
+    return true;
+  }
+
+  /* ======================================================================= *
+   *  Mode focus (double-clic), sélection, chemin le plus court
+   * ======================================================================= */
+  function focus(n) {
+    quitterFocus();
+    const garde = n.closedNeighborhood().filter(e => !e.hasClass('masque'));
+    cy.elements().filter(e => !garde.contains(e)).addClass('hors-focus');
+    etat.focus = n.id();
+    bandeau('Mode focus : <strong>' + esc(N[n.id()].nom) + '</strong> <em>(Échap pour quitter)</em>', () => quitterFocus());
+    cy.animate({ center: { eles: n }, zoom: Math.min(1.5, Math.max(cy.zoom(), 0.9)) }, { duration: reduit ? 0 : 500 });
+  }
+  function quitterFocus() {
+    if (!etat.focus) return;
+    cy.elements().removeClass('hors-focus');
+    etat.focus = null;
+    if (!etat.cheminAffiche && !etat.modeChemin) masquerBandeau();
+    dessinerMini();
+  }
+
+  function selectionner(id) {
+    cy.elements().unselect();
+    if (id && present(id)) cy.getElementById(id).select();
+  }
+
+  function plusCourtChemin(a, b) {            // Dijkstra sur TOUTES les données (les nœuds absents sont affichés ensuite)
+    const poids = { supply: 1, ma: 1.1, concurrence: 1.25 };   // la chaîne de valeur est privilégiée à égalité de sauts
+    const dist = {}, prev = {}, vus = {};
+    Object.keys(N).forEach(k => { dist[k] = Infinity; });
+    dist[a] = 0;
+    for (;;) {
+      let u = null, meilleur = Infinity;
+      Object.keys(dist).forEach(k => { if (!vus[k] && dist[k] < meilleur) { meilleur = dist[k]; u = k; } });
+      if (u === null || u === b) break;
+      vus[u] = true;
+      (ADJ[u] || []).forEach(({ autre, lien }) => {
+        if (!lienActif(lien)) return;
+        const nd = dist[u] + poids[lien.type];
+        if (nd < dist[autre]) { dist[autre] = nd; prev[autre] = { de: u, lien }; }
+      });
+    }
+    if (dist[b] === Infinity) return null;
+    const noeuds = [b], liens = [];
+    for (let c = b; c !== a;) { const p = prev[c]; liens.push(p.lien); c = p.de; noeuds.push(c); }
+    return { noeuds: noeuds.reverse(), liens: liens.reverse() };
+  }
+
+  function verbe(lien, de) {                  // formulations neutres : valables pour une société comme pour un groupe
+    if (lien.type === 'concurrence') return 'concurrence';
+    const sortant = lien.source === de;
+    if (lien.type === 'supply') return sortant ? 'fournit' : 'a pour fournisseur';
+    if (lien.statut === 'participation') return sortant ? 'détient une part de' : 'a pour actionnaire';
+    if (lien.statut === 'annulé') return sortant ? 'a tenté de racheter' : 'a eu pour prétendant';
+    if (lien.statut === 'annoncé') return sortant ? 'a annoncé le rachat de' : 'a pour acquéreur annoncé';
+    return sortant ? 'a racheté' : 'a pour acquéreur';
+  }
+
+  function choisirPourChemin(id) {
+    if (!etat.depart) {
+      if (etat.cheminAffiche) effacerChemin();
+      etat.depart = id; selectionner(id);
+      bandeau('Départ : <strong>' + esc(N[id].nom) + '</strong> <em>– choisissez la seconde société</em>', () => basculerModeChemin(false));
+    } else if (etat.depart !== id) {
+      calculerChemin(etat.depart, id);
+    }
+  }
+
+  function calculerChemin(a, b) {
+    const res = plusCourtChemin(a, b);
+    etat.depart = null;
+    if (!res) { bandeau('Aucun lien entre <strong>' + esc(N[a].nom) + '</strong> et <strong>' + esc(N[b].nom) + '</strong> avec les filtres actuels.', () => basculerModeChemin(false)); return; }
+    quitterFocus();
+    res.noeuds.forEach(assurer);
+    syncAretes(); appliquerFiltres();
+    const ids = {};
+    res.noeuds.forEach(id => { ids[id] = true; });
+    res.liens.forEach(l => { ids[l.id] = true; });
+    cy.elements().addClass('terne');
+    cy.elements().filter(e => ids[e.id()]).removeClass('terne').addClass('chemin');
+    etat.cheminAffiche = true;
+    let txt = '';
+    res.noeuds.forEach((id, i) => { txt += (i ? ' <em>' + verbe(res.liens[i - 1], res.noeuds[i - 1]) + '</em> ' : '') + '<strong>' + esc(N[id].nom) + '</strong>'; });
+    bandeau(txt + ' <em>· ' + res.liens.length + (res.liens.length > 1 ? ' liens' : ' lien') + '</em>', () => effacerChemin());
+    cadrerPoints(res.noeuds.map(pointDe), 1.3);
+  }
+
+  function effacerChemin() {
+    if (!cy) return;
+    cy.elements().removeClass('terne').removeClass('chemin');
+    etat.cheminAffiche = false; etat.depart = null;
+    if (!etat.focus) masquerBandeau();
+  }
+
+  function basculerModeChemin(actif) {
+    etat.modeChemin = actif;
+    $('#mm-chemin').setAttribute('aria-pressed', String(actif));
+    effacerChemin();
+    if (actif) bandeau('Choisissez la première société (clic ou recherche)', () => basculerModeChemin(false));
+    else masquerBandeau();
+  }
+
+  /* ======================================================================= *
+   *  Bandeau d'information
+   * ======================================================================= */
+  let actionBandeau = null;
+  function bandeau(html, action) {
+    $('#mm-bandeau-txt').innerHTML = html;
+    $('#mm-bandeau').classList.add('visible');
+    actionBandeau = action || null;
+  }
+  function masquerBandeau() { $('#mm-bandeau').classList.remove('visible'); actionBandeau = null; }
+
+  /* ======================================================================= *
+   *  Fiche latérale
+   * ======================================================================= */
+  function pastilles(n) { let s = ''; for (let i = 1; i <= 5; i++) s += i <= n ? '●' : '<i>●</i>'; return s; }
+  function demo(n, champ) { return n.satellite || (n.live || []).indexOf(champ) >= 0 ? '' : '<span class="mm-demo" title="Valeur de démonstration">démo</span>'; }
+  const aller = id => '<button type="button" class="mm-lien" data-go="' + esc(id) + '">' + esc(N[id].nom) + '</button>';
+
+  function ficheHtml(n) {
+    const adj = ADJ[n.id] || [];
+    const conc = adj.filter(a => a.lien.type === 'concurrence').sort((a, b) => b.lien.intensite - a.lien.intensite);
+    const rachats = adj.filter(a => a.lien.type === 'ma' && a.lien.source === n.id).sort((a, b) => b.lien.annee - a.lien.annee);
+    const parQui = adj.filter(a => a.lien.type === 'ma' && a.lien.cible === n.id).sort((a, b) => b.lien.annee - a.lien.annee);
+    const fourn = adj.filter(a => a.lien.type === 'supply' && a.lien.cible === n.id);
+    const clients = adj.filter(a => a.lien.type === 'supply' && a.lien.source === n.id);
+    const deal = a => '<li class="' + (a.lien.statut === 'annulé' ? 'annule' : '') + '" title="' + esc(a.lien.note) + '"><span>' + aller(a.autre) + '</span><span class="mm-meta">' + md(a.lien.montant) + ' · ' + a.lien.annee + ' · ' + LIBELLE_STATUT[a.lien.statut] + '</span></li>';
+    const simple = a => '<li title="' + esc(a.lien.note) + '"><span>' + aller(a.autre) + '</span><span class="mm-meta">' + esc(a.lien.note) + '</span></li>';
+    const bloc = (titre, liste, rendu) => liste.length ? '<h3>' + titre + '</h3><ul>' + liste.map(rendu).join('') + '</ul>' : '';
+
+    let h = '<button type="button" class="mm-fermer" data-fermer aria-label="Fermer la fiche">×</button><h2>' + esc(n.nom) + '</h2>';
+    if (n.ticker) h += '<span class="mm-ticker">' + esc(n.ticker) + '</span>';
+    if (n.satellite) {
+      const finale = parQui.some(a => a.lien.statut === 'finalisé');
+      const part = parQui.some(a => a.lien.statut === 'participation');
+      h += '<p class="mm-role">' + (finale ? 'Société rachetée' : (part ? 'Participation' : 'Cible d\'une offre non aboutie')) + '</p>';
+    } else {
+      h += '<p class="mm-role">' + esc(n.role) + '</p><dl class="mm-fiche-grille">'
+        + '<div><dt>' + (n.prive ? 'Valorisation estimée' : 'Capitalisation') + '</dt><dd>' + md(n.cap) + demo(n, 'cap') + '</dd></div>'
+        + '<div><dt>PER</dt><dd>' + (n.per == null ? '–' : nf1.format(n.per)) + demo(n, 'per') + '</dd></div>'
+        + '<div><dt>Depuis le 1er janvier</dt><dd class="' + (n.ytd == null ? '' : (n.ytd >= 0 ? 'pos' : 'neg')) + '">' + pct(n.ytd) + demo(n, 'ytd') + '</dd></div>'
+        + '<div><dt>Secteur</dt><dd>' + esc((N[n.secteur] || {}).nom || '–') + '</dd></div></dl>';
+    }
+    h += bloc('Concurrents directs', conc, a => '<li title="' + esc(a.lien.note) + '"><span>' + aller(a.autre) + '</span><span class="mm-pastilles" aria-label="intensité ' + a.lien.intensite + ' sur 5">' + pastilles(a.lien.intensite) + '</span></li>');
+    h += bloc('Rachats et participations', rachats, deal);
+    h += bloc(n.satellite ? 'Acquéreur' : 'Cible de rachats ou de participations', parQui, deal);
+    h += bloc('Fournisseurs', fourn, simple);
+    h += bloc('Clients', clients, simple);
+
+    h += '<div class="mm-actions">';
+    if (n.indice) h += '<a class="bouton" href="/run?indice=' + encodeURIComponent(n.indice) + '#' + encodeURIComponent(n.ticker) + '" target="_blank" rel="noopener">Ouvrir dans le Screener</a>';
+    else if (n.ticker) h += '<span class="mm-hors">Hors des indices du screener</span> <a href="https://finance.yahoo.com/quote/' + encodeURIComponent(n.ticker) + '" target="_blank" rel="noopener">Yahoo Finance</a>';
+    h += '</div>';
+    if (!n.satellite && (n.live || []).length === 0) h += '<p class="mm-note">Valeurs chiffrées de démonstration : ordres de grandeur, à remplacer par les données en direct.</p>';
+    return h;
+  }
+
+  function ouvrirFiche(id) {
+    const n = N[id]; if (!n || n.type !== 'societe') return;
+    etat.fiche = id;
+    const f = $('#mm-fiche');
+    f.innerHTML = ficheHtml(n);
+    f.classList.add('ouverte'); f.setAttribute('aria-hidden', 'false'); f.scrollTop = 0;
+    $('#mm-scene').classList.add('avec-fiche');
+    dessinerMini();
+  }
+  function fermerFiche() {
+    etat.fiche = null;
+    const f = $('#mm-fiche');
+    f.classList.remove('ouverte'); f.setAttribute('aria-hidden', 'true');
+    $('#mm-scene').classList.remove('avec-fiche');
+    if (cy) { cy.elements().unselect(); dessinerMini(); }
+  }
+
+  /* ======================================================================= *
+   *  Navigation : clic, recherche
+   * ======================================================================= */
+  function clicNoeud(n) {
+    const d = n.data(), id = d.id;
+    if (etat.modeChemin && d.type === 'societe') { choisirPourChemin(id); return; }
+    if (d.type === 'secteur') {
+      if (etat.secteurs.has(id)) replier(id); else deployerSecteur(id, true);
+      return;
+    }
+    quitterFocus();
+    selectionner(id);
+    revelerVoisins(id, true);
+    ouvrirFiche(id);
+  }
+
+  function allerA(id) {
+    if (!N[id] || N[id].type !== 'societe') return;
+    const ajoute = assurer(id);
+    if (etat.modeChemin) { choisirPourChemin(id); return; }
+    selectionner(id); ouvrirFiche(id);
+    const centrer = () => { if (present(id)) cy.animate({ center: { eles: cy.getElementById(id) }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: reduit ? 0 : 550, easing: 'ease-in-out' }); };
+    if (ajoute) setTimeout(centrer, 30); else centrer();
+  }
+
+  function trouver(q) {
+    const k = norm(q); if (!k) return null;
+    const liste = Object.keys(N).map(i => N[i]).filter(n => n.type === 'societe');
+    return liste.find(n => norm(n.ticker) === k || norm(n.nom) === k || norm(n.nom + ' (' + (n.ticker || '') + ')') === k)
+      || liste.find(n => norm(n.nom).indexOf(k) === 0 || (n.ticker && norm(n.ticker).indexOf(k) === 0))
+      || liste.find(n => norm(n.nom).indexOf(k) >= 0) || null;
+  }
+  let derniereRecherche = { id: null, t: 0 };
+  function lancerRecherche() {
+    const champ = $('#mm-q'), n = trouver(champ.value);
+    champ.setAttribute('aria-invalid', n ? 'false' : String(!!champ.value.trim()));
+    if (!n) return;
+    const now = Date.now();
+    if (derniereRecherche.id === n.id && now - derniereRecherche.t < 600) return;     // Entrée déclenche aussi « change »
+    derniereRecherche = { id: n.id, t: now };
+    allerA(n.id); champ.blur();
+  }
+
+  /* ======================================================================= *
+   *  Mini-carte
+   * ======================================================================= */
+  const mini = $('#mm-mini'), mctx = mini.getContext('2d'), MW = 200, MH = 140;
+  let miniTr = null, miniPlanifie = false;
+  (function () { const dpr = window.devicePixelRatio || 1; mini.width = MW * dpr; mini.height = MH * dpr; mctx.setTransform(dpr, 0, 0, dpr, 0, 0); })();
+
+  function couleurPoint(n) {
+    const d = n.data();
+    if (d.type === 'secteur') return COL.accent;
+    return d.tend === 'haus' ? COL.vert : (d.tend === 'baisse' ? COL.rouge : (d.tend === 'plat' ? COL.ambre : COL.muted));
+  }
+  function dessinerMini() {
+    if (!cy || miniPlanifie) return;
+    miniPlanifie = true;
+    (window.requestAnimationFrame || (f => setTimeout(f, 16)))(() => {
+      miniPlanifie = false;
+      mctx.clearRect(0, 0, MW, MH);
+      const noeuds = cy.nodes().filter(n => n.visible());
+      if (noeuds.empty()) return;
+      const bb = noeuds.boundingBox({ includeLabels: false, includeOverlays: false }), ext = cy.extent();
+      const x1 = Math.min(bb.x1, ext.x1), x2 = Math.max(bb.x2, ext.x2), y1 = Math.min(bb.y1, ext.y1), y2 = Math.max(bb.y2, ext.y2);
+      const pad = 12, s = Math.min((MW - 2 * pad) / (x2 - x1 || 1), (MH - 2 * pad) / (y2 - y1 || 1));
+      const ox = (MW - (x2 - x1) * s) / 2 - x1 * s, oy = (MH - (y2 - y1) * s) / 2 - y1 * s;
+      noeuds.forEach(n => {
+        const p = n.position();
+        mctx.beginPath(); mctx.fillStyle = couleurPoint(n); mctx.globalAlpha = n.hasClass('terne') ? 0.25 : 1;
+        mctx.arc(p.x * s + ox, p.y * s + oy, Math.max(1.8, n.data('taille') * s / 2), 0, 6.2832); mctx.fill();
+      });
+      mctx.globalAlpha = 1; mctx.strokeStyle = COL.accent; mctx.lineWidth = 1.5;
+      mctx.strokeRect(ext.x1 * s + ox, ext.y1 * s + oy, (ext.x2 - ext.x1) * s, (ext.y2 - ext.y1) * s);
+      miniTr = { s, ox, oy };
+    });
+  }
+  function deplacerDepuisMini(e) {
+    if (!miniTr) return;
+    const r = mini.getBoundingClientRect();
+    const mx = ((e.clientX - r.left) - miniTr.ox) / miniTr.s, my = ((e.clientY - r.top) - miniTr.oy) / miniTr.s;
+    cy.pan({ x: cy.width() / 2 - mx * cy.zoom(), y: cy.height() / 2 - my * cy.zoom() });
+  }
+
+  /* ======================================================================= *
+   *  Info-bulles
+   * ======================================================================= */
+  const tip = $('#mm-tip'), scene = $('#mm-scene');
+  function placerTip(e) {
+    const oe = e && e.originalEvent; if (!oe) return;
+    const r = scene.getBoundingClientRect();
+    const x = Math.min(oe.clientX - r.left + 14, r.width - tip.offsetWidth - 8), y = Math.min(oe.clientY - r.top + 14, r.height - tip.offsetHeight - 8);
+    tip.style.transform = 'translate(' + Math.max(4, x) + 'px,' + Math.max(4, y) + 'px)';
+  }
+  function montrerTip(e, html) { tip.innerHTML = html; tip.hidden = false; placerTip(e); }
+  function cacherTip() { tip.hidden = true; }
+
+  function tipNoeud(d) {
+    const n = N[d.id];
+    if (n.type === 'secteur') return '<strong>' + esc(n.nom) + '</strong><br><span class="mm-meta">Cliquer pour déployer / replier</span>';
+    if (n.satellite) return '<strong>' + esc(n.nom) + '</strong><br><span class="mm-meta">Société rachetée ou cible</span>';
+    return '<strong>' + esc(n.nom) + '</strong>' + (n.ticker ? ' <span class="mm-meta">' + esc(n.ticker) + '</span>' : '') + '<br>'
+      + '<span class="mm-meta">' + md(n.cap) + (n.ytd == null ? '' : ' · ' + pct(n.ytd) + ' depuis janvier') + '</span>';
+  }
+  function tipArete(d) {
+    const l = DATA.liensParId[d.id]; if (!l) return '';
+    const a = esc(N[l.source].nom), b = esc(N[l.cible].nom);
+    if (l.type === 'ma') return '<strong>' + a + ' → ' + b + '</strong><br>' + md(l.montant) + ' · ' + l.annee + ' · ' + LIBELLE_STATUT[l.statut] + '<br><span class="mm-meta">' + esc(l.note) + '</span>';
+    if (l.type === 'supply') return '<strong>' + a + ' → ' + b + '</strong><br><span class="mm-meta">Fournisseur vers client · ' + esc(l.note) + '</span>';
+    return '<strong>' + a + ' ↔ ' + b + '</strong><br>Concurrence directe · intensité ' + l.intensite + '/5<br><span class="mm-meta">' + esc(l.note) + '</span>';
+  }
+
+  /* ======================================================================= *
+   *  Initialisation de Cytoscape et des commandes
+   * ======================================================================= */
+  function creerCarte() {
+    cy = cytoscape({ container: $('#mm-cy'), elements: [], style: construireStyle(), minZoom: 0.15, maxZoom: 3,
+                     wheelSensitivity: 0.25, boxSelectionEnabled: false });
+
+    let dernier = { id: null, t: 0 };                    // double-clic détecté à la main (portable, tactile compris)
+    cy.on('tap', 'node', e => {
+      const n = e.target, now = Date.now();
+      if (dernier.id === n.id() && now - dernier.t < 350) { dernier = { id: null, t: 0 }; focus(n); return; }
+      dernier = { id: n.id(), t: now };
+      clicNoeud(n);
+    });
+    cy.on('tap', e => {
+      if (e.target !== cy) return;
+      fermerFiche(); if (etat.cheminAffiche) effacerChemin(); if (etat.focus) quitterFocus();
+    });
+    cy.on('mouseover', 'node', e => { $('#mm-cy').style.cursor = 'pointer'; montrerTip(e, tipNoeud(e.target.data())); });
+    cy.on('mouseover', 'edge', e => { if (e.target.data('type') === 'struct') return; e.target.addClass('survol'); montrerTip(e, tipArete(e.target.data())); });
+    cy.on('mouseout', 'node, edge', e => { $('#mm-cy').style.cursor = ''; e.target.removeClass('survol'); cacherTip(); });
+    cy.on('mousemove', e => { if (!tip.hidden) placerTip(e); });
+    cy.on('viewport position add remove', () => { cacherTip(); dessinerMini(); });
+  }
+
+  function remettreAZero() {
+    quitterFocus(); effacerChemin(); fermerFiche(); masquerBandeau();
+    etat.secteurs.clear(); etat.depart = null;
+    cy.elements().remove();
+    poserSecteurs(); appliquerFiltres();
+    recadrer();
+  }
+  function recadrer() {
+    const pts = cy.nodes().filter(n => n.visible()).map(n => { const p = n.position(); return { x: p.x, y: p.y, r: n.data('taille') / 2 }; });
+    cadrerPoints(pts, 1);
+  }
+
+  function brancherCommandes() {
+    $('#mm-bandeau-x').addEventListener('click', () => { const a = actionBandeau; masquerBandeau(); if (a) a(); });
+    $('#mm-fiche').addEventListener('click', e => {
+      const b = e.target.closest('[data-go]');
+      if (b) { allerA(b.dataset.go); return; }
+      if (e.target.closest('[data-fermer]')) fermerFiche();
+    });
+    document.querySelectorAll('.mm-chip[data-type]').forEach(b => b.addEventListener('click', () => {
+      const v = b.getAttribute('aria-pressed') !== 'true';
+      b.setAttribute('aria-pressed', String(v)); etat.types[b.dataset.type] = v;
+      appliquerFiltres(); if (v && etat.fiche) revelerVoisins(etat.fiche, false);
+    }));
+    document.querySelectorAll('.mm-chip[data-taille]').forEach(b => b.addEventListener('click', () => {
+      const v = b.getAttribute('aria-pressed') !== 'true';
+      b.setAttribute('aria-pressed', String(v)); etat.tailles[b.dataset.taille] = v; appliquerFiltres();
+    }));
+
+    const amin = $('#mm-amin'), amax = $('#mm-amax');
+    [amin, amax].forEach(r => { r.min = ANNEES[0]; r.max = ANNEES[1]; r.step = 1; });
+    amin.value = etat.amin; amax.value = etat.amax;
+    const majAnnees = qui => {
+      let a = +amin.value, b = +amax.value;
+      if (a > b) { if (qui === amin) { b = a; amax.value = b; } else { a = b; amin.value = a; } }
+      etat.amin = a; etat.amax = b; $('#mm-omin').textContent = a; $('#mm-omax').textContent = b;
+      appliquerFiltres();
+    };
+    amin.addEventListener('input', () => majAnnees(amin)); amax.addEventListener('input', () => majAnnees(amax));
+    $('#mm-omin').textContent = etat.amin; $('#mm-omax').textContent = etat.amax;
+
+    const q = $('#mm-q');
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); lancerRecherche(); } });
+    q.addEventListener('change', lancerRecherche);
+    q.addEventListener('input', () => q.setAttribute('aria-invalid', 'false'));
+    $('#mm-chemin').addEventListener('click', () => basculerModeChemin(!etat.modeChemin));
+    $('#mm-reset').addEventListener('click', remettreAZero);
+    $('#mm-recadrer').addEventListener('click', recadrer);
+
+    let glisse = false;
+    mini.addEventListener('pointerdown', e => { glisse = true; if (mini.setPointerCapture) mini.setPointerCapture(e.pointerId); deplacerDepuisMini(e); });
+    mini.addEventListener('pointermove', e => { if (glisse) deplacerDepuisMini(e); });
+    mini.addEventListener('pointerup', () => { glisse = false; });
+
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      if (etat.focus) quitterFocus();
+      else if (etat.cheminAffiche || etat.modeChemin) basculerModeChemin(false);
+      else if (etat.fiche) fermerFiche();
+    });
+    window.addEventListener('resize', () => { if (cy) { cy.resize(); dessinerMini(); } });
+    document.addEventListener('quant-theme', () => {
+      lireCouleurs();
+      if (cy) { cy.style().fromJson(construireStyle()).update(); dessinerMini(); }
+    });
+  }
+
+  /* ======================================================================= *
+   *  Données : structure immédiate, puis valeurs en direct (arrière-plan)
+   * ======================================================================= */
+  function appliquerDonnees(data) {
+    DATA = data;
+    DATA.liensParId = {};
+    data.liens.forEach(l => { DATA.liensParId[l.id] = l; });
+    return data;
+  }
+
+  function majSource(meta, echec) {
+    const s = $('#mm-source');
+    if (meta && meta.live) { s.textContent = 'Données en direct · ' + meta.maj; s.classList.add('direct'); s.title = meta.nb_live + ' sociétés mises à jour'; }
+    else { s.textContent = echec ? 'Données de démonstration (direct indisponible)' : 'Données de démonstration'; s.classList.remove('direct'); }
+  }
+
+  async function chargerEnDirect() {
+    try {
+      const rep = await fetch('/api/mindmap-data?live=true');
+      if (!rep.ok) throw new Error('HTTP ' + rep.status);
+      const j = await rep.json();
+      if (!j.meta || !j.meta.live) { majSource(null, true); return; }
+      j.noeuds.forEach(nv => {                                   // met à jour les valeurs sans toucher au placement
+        const n = N[nv.id]; if (!n) return;
+        n.cap = nv.cap; n.per = nv.per; n.ytd = nv.ytd; n.live = nv.live;
+        calculer(n);
+        const el = cy.getElementById(nv.id);
+        if (el.nonempty()) el.data({ taille: n.taille, tend: n.tend, cat: n.cat });
+      });
+      DATA.meta = j.meta;
+      majSource(j.meta, false);
+      appliquerFiltres();
+      if (etat.fiche) ouvrirFiche(etat.fiche);
+    } catch (e) { majSource(null, true); }
+  }
+
+  async function demarrer() {
+    const erreur = $('#mm-erreur');
+    if (typeof cytoscape === 'undefined') {
+      erreur.textContent = 'La bibliothèque Cytoscape.js n\'a pas pu être chargée (réseau ou bloqueur de contenu).'; erreur.classList.add('visible'); return;
+    }
+    let data;
+    try {
+      const rep = await fetch('/api/mindmap-data');
+      if (!rep.ok) throw new Error('HTTP ' + rep.status);
+      data = await rep.json();
+    } catch (e) {
+      erreur.textContent = 'Impossible de charger les données (/api/mindmap-data). Vérifiez que le routeur est bien inclus dans main.py.';
+      erreur.classList.add('visible'); return;
+    }
+    appliquerDonnees(data);
+    indexer(data);
+    lireCouleurs();
+    creerCarte();
+    brancherCommandes();
+
+    const liste = $('#mm-liste');
+    liste.innerHTML = Object.keys(N).map(i => N[i]).filter(n => n.type === 'societe')
+      .map(n => '<option value="' + esc(n.nom + (n.ticker ? ' (' + n.ticker + ')' : '')) + '"></option>').join('');
+
+    poserSecteurs(); appliquerFiltres(); recadrer(); majSource(data.meta, false);
+    chargerEnDirect();
+  }
+
+  window.CarteMA = { get cy() { return cy; }, etat, N: () => N, allerA, deployerSecteur, revelerVoisins, plusCourtChemin, calculerChemin,
+                     focus, quitterFocus, remettreAZero, trouver, appliquerFiltres, relaxer, demarrer };
+  demarrer();
+})();
+</script>
+</body>
+</html>
