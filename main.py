@@ -4,8 +4,6 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from app.api.screener import router as api_router
 from app.api.mindmap_routes import router as mindmap_router  # juste sous l'import de api_router
-...
-app.include_router(mindmap_router)
 
 app = FastAPI(
     title="Terminal Quantitatif SaaS",
@@ -20,6 +18,7 @@ STATIC_DIR = BASE_DIR / "app" / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 app.include_router(api_router)
+app.include_router(mindmap_router)
 
 @app.middleware("http")
 async def desactiver_cache_navigateur(request: Request, call_next):
