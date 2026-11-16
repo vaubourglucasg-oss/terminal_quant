@@ -182,14 +182,11 @@ async def landing_page(request: Request):
 
 
 @router.get("/run", response_class=HTMLResponse)
-async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str = "", ticker: str = ""):
+async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str = ""):
     _, _, regions, _ = await _contexte()
-    ticker = ticker.strip().upper() if RE_TICKER.match(ticker.strip()) else ""
-    if ticker:      # mode titre isolé : aucun scan ; l'indice éventuellement fourni ne sert que de contexte (retour, Carte M&A)
-        indice, secteur = request.query_params.get("indice", ""), ""
-    cfg = {"indice": indice, "secteur": secteur if secteur in SECTEURS else "", "ticker": ticker}
+    cfg = {"indice": indice, "secteur": secteur if secteur in SECTEURS else ""}
     return templates.TemplateResponse(request, "dashboard.html", {
-        "indice": indice, "secteur": cfg["secteur"], "ticker": ticker, "regions": regions, "cfg": cfg}, headers=SANS_CACHE)
+        "indice": indice, "secteur": cfg["secteur"], "regions": regions, "cfg": cfg}, headers=SANS_CACHE)
 
 
 @router.get("/stream")

@@ -273,8 +273,7 @@ $(function () {
   console.log("Tentative de connexion SSE vers:", CFG.indice);
   const reglages = window.Reglages ? encodeURIComponent(JSON.stringify(window.Reglages.serveur())) : '';
   const url = `/stream?indice=${encodeURIComponent(CFG.indice)}&secteur=${encodeURIComponent(CFG.secteur)}&r=${reglages}`;
-  // /run?ticker=NVDA : mode « titre isolé », aucun flux d'indice (voir le bloc plus bas)
-  const src = CFG.ticker ? Object.assign(new EventTarget(), { readyState: 2, close() {} }) : new EventSource(url);
+  const src = new EventSource(url);
   
   src.addEventListener('init', e => { 
     console.log("Flux initié par le serveur !");
@@ -315,25 +314,7 @@ $(function () {
     src.close();
     $('#etat').text('Connexion interrompue : rechargez la page ou redémarrez le serveur Python.');
   };
-  // ---------- mode « titre isolé » : /run?ticker=NVDA (une seule analyse via /api/titre, aucun scan d'indice) ----------
-  
-  if (CFG.ticker) {
-    const tk = CFG.ticker;
-    $('#etat').text('Analyse de ' + tk + '…');
-    fetch('/api/titre/' + encodeURIComponent(tk))
-      .then(rep => rep.json().catch(() => ({})).then(d => ({ ok: rep.ok, d })))
-      .then(({ ok, d }) => {
-        if (!ok || !d || !d.ticker) throw new Error((d && (d.detail || d.message)) || 'titre introuvable ou données insuffisantes');
-        d.signal = 'INSUFFISANT';
-        d.alertes_score = ['Titre analysé seul : le score est un classement relatif et demande un indice complet. Ratios et valorisation sont calculés normalement.'];
-        src.onmessage({ data: JSON.stringify(d) });
-        src.dispatchEvent(new MessageEvent('close'));
-        $('#etat').text(tk + ' analysé seul, sans classement.');
-        $('#resume').text('Titre analysé seul : ratios et valorisation sans classement relatif (le score se calcule dans un indice complet).');
-        $('#tbl tbody tr').first().trigger('click');          // ouvre directement la fiche détaillée
-      })
-      .catch(e => { termine = true; $('#etat').text(tk + ' : ' + e.message); $('#barre').attr('value', 1); table.draw(false); });
-  }
+
   // Exposé pour parametres.js (recalcul du classement, attente de la fin de l'analyse)
   Object.assign(window.Quant, { src, majResume });
 });
