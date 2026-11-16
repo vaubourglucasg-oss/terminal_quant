@@ -8,8 +8,6 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <link rel="stylesheet" href="/static/style.css">
 <style>
-/* Carte mentale : n'utilise que les variables de style.css (--papier, --surface, --encre, --marine...), donc suit
-   le thème clair / sombre. Tous les sélecteurs sont préfixés mm- : aucune interférence avec le reste de l'app. */
 html, body { height: 100%; }
 body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; overflow: hidden; }
 
@@ -62,7 +60,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
 #mm-tip[hidden] { display: none; }
 #mm-tip .mm-meta { color: var(--muted); }
 
-/* fiche latérale : légèrement translucide, sans lueur ni dégradé */
 #mm-fiche { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 4; width: min(380px, calc(100% - 24px)); overflow-y: auto; background: var(--surface); background: color-mix(in srgb, var(--surface) 94%, transparent);
   -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid var(--trait); border-radius: 8px; padding: 16px 18px 18px;
   transform: translateX(calc(100% + 24px)); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s; }
@@ -94,7 +91,7 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
 </head>
 <body class="mm">
 <header class="mm-barre">
-  <a class="mm-retour" href="/"><i class="fa-solid fa-arrow-left"></i> Terminal</a>
+  <a class="mm-retour" id="mm-retour" href="/"><i class="fa-solid fa-arrow-left"></i> Terminal</a>
   <h1 class="mm-titre">Carte économique et M&amp;A</h1>
 
   <div class="mm-recherche">
@@ -109,6 +106,7 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     <button type="button" class="mm-chip" data-type="ma" aria-pressed="true"><i class="mm-pt ma"></i>Rachats</button>
     <button type="button" class="mm-chip" data-type="supply" aria-pressed="true"><i class="mm-pt supply"></i>Chaîne de valeur</button>
   </div>
+
   <div class="mm-groupe">
     <label class="mm-lbl" for="mm-indice">Indice</label>
     <select id="mm-indice" style="font:inherit;font-size:.88rem;padding:5px 8px;border:1px solid var(--trait);border-radius:4px;background:var(--papier);color:var(--encre);">
@@ -162,9 +160,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
 (function () {
   'use strict';
 
-  /* ======================================================================= *
-   *  Utilitaires
-   * ======================================================================= */
   const $ = s => document.querySelector(s);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const norm = s => String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -178,20 +173,17 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
   const CLE_STATUT = { 'finalisé': 'final', 'annulé': 'annule', 'participation': 'part', 'annoncé': 'annonce' };
   const RAYON_SECTEURS = 680, MARGE = 56;
 
-  /* ======================================================================= *
-   *  État, données et index
-   * ======================================================================= */
   let DATA = null, cy = null, COL = {};
   let N = {}, ADJ = {}, ANNEES = [2000, new Date().getFullYear()];
   const etat = {
     types: { concurrence: true, ma: true, supply: true },
     tailles: { mega: true, large: true, mid: true },
     amin: 2000, amax: new Date().getFullYear(),
-    secteurs: new Set(),          // secteurs déployés
+    secteurs: new Set(),
     focus: null, modeChemin: false, depart: null, cheminAffiche: false, fiche: null
   };
 
-  function calculer(n) {          // grandeurs dérivées des données (taille, tendance, catégorie)
+  function calculer(n) {
     if (n.type === 'secteur') { n.taille = 96; return; }
     if (n.satellite) { n.taille = 22; n.tend = 'nd'; n.cat = null; return; }
     const cap = n.cap || 0;
@@ -216,9 +208,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
 
   const lienActif = l => !!etat.types[l.type] && (l.type !== 'ma' || (l.annee >= etat.amin && l.annee <= etat.amax));
 
-  /* ======================================================================= *
-   *  Couleurs (lues dans les variables CSS du thème) et style Cytoscape
-   * ======================================================================= */
   function lireCouleurs() {
     const cs = getComputedStyle(document.documentElement);
     const g = (nom, defaut) => (cs.getPropertyValue(nom) || '').trim() || defaut;
@@ -268,9 +257,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     ];
   }
 
-  /* ======================================================================= *
-   *  Éléments Cytoscape
-   * ======================================================================= */
   function donneeNoeud(n) {
     return { id: n.id, label: n.nom, type: n.type, taille: n.taille, tend: n.tend || 'nd', cat: n.cat || '',
              satellite: !!n.satellite, prive: !!n.prive, secteur: n.secteur || '' };
@@ -303,16 +289,13 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
         const l = DATA.liensParId[d.id];
         e.toggleClass('masque', !(l && lienActif(l)) || cache(e.source()) || cache(e.target()));
       });
-      cy.nodes().forEach(n => {                 // une société rachetée sans aucun lien visible disparaît aussi
+      cy.nodes().forEach(n => {
         if (n.data('satellite')) n.toggleClass('masque', n.connectedEdges().filter(e => !e.hasClass('masque')).empty());
       });
     });
     dessinerMini();
   }
 
-  /* ======================================================================= *
-   *  Placement : éventail autour du parent, puis relaxation anti-chevauchement
-   * ======================================================================= */
   function occupes() {
     return cy.nodes().filter(n => !n.hasClass('masque')).map(n => { const p = n.position(); return { x: p.x, y: p.y, r: n.data('taille') / 2 }; });
   }
@@ -339,7 +322,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     if (!ids.length) return [];
     const p0 = cy.getElementById(parentId).position(), n = ids.length;
     const pts = ids.map((id, i) => {
-      // Répartition sur plusieurs anneaux concentriques dès qu'il y a beaucoup de sociétés
       const parAnneau = 10;
       const anneau = Math.floor(i / parAnneau);
       const idxDansAnneau = i % parAnneau;
@@ -369,9 +351,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
   }
   const pointDe = id => { const p = cy.getElementById(id).position(); return { x: p.x, y: p.y, r: N[id].taille / 2 }; };
 
-  /* ======================================================================= *
-   *  Drill-down : secteur → sociétés → voisins (concurrents, rachats, fournisseurs)
-   * ======================================================================= */
   function poserSecteurs() {
     const secs = DATA.secteurs;
     cy.add(secs.map((s, i) => {
@@ -387,7 +366,7 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     const ids = DATA.noeuds.filter(n => n.secteur === sid && !n.satellite).map(n => n.id);
     const pos = cy.getElementById(sid).position();
     const manquants = ids.filter(id => !present(id));
-    const pts = ajouterAutour(manquants, sid, Math.atan2(pos.y, pos.x), 150 + 22 * ids.length, Math.min(Math.PI * 1.7, 0.42 * ids.length), animer);
+    const pts = ajouterAutour(manquants, sid, Math.atan2(pos.y, pos.x), 240 + 12 * Math.min(ids.length, 15), Math.min(Math.PI * 1.7, 0.42 * ids.length), animer);
     cy.add(ids.filter(id => !present('s_' + id)).map(id => ({ group: 'edges', data: { id: 's_' + id, source: sid, target: id, type: 'struct', epaisseur: 1 } })));
     syncAretes(); appliquerFiltres();
     if (animer) cadrerPoints(pts.concat([pointDe(sid)]));
@@ -411,12 +390,11 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     });
     if (!manquants.length) return;
     const pos = cy.getElementById(id).position();
-    const pts = ajouterAutour(manquants, id, Math.atan2(pos.y, pos.x), 140 + 16 * manquants.length, Math.min(Math.PI * 1.8, 0.5 * manquants.length), animer);
+    const pts = ajouterAutour(manquants, id, Math.atan2(pos.y, pos.x), 180 + 16 * manquants.length, Math.min(Math.PI * 1.8, 0.5 * manquants.length), animer);
     syncAretes(); appliquerFiltres();
     if (animer) cadrerPoints(pts.concat([pointDe(id)]));
   }
 
-  // rend une société visible sans animation (recherche, chemin) ; retourne true si quelque chose a été ajouté
   function assurer(id) {
     if (!N[id] || present(id)) return false;
     quitterFocus();
@@ -431,9 +409,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     return true;
   }
 
-  /* ======================================================================= *
-   *  Mode focus (double-clic), sélection, chemin le plus court
-   * ======================================================================= */
   function focus(n) {
     quitterFocus();
     const garde = n.closedNeighborhood().filter(e => !e.hasClass('masque'));
@@ -455,8 +430,8 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     if (id && present(id)) cy.getElementById(id).select();
   }
 
-  function plusCourtChemin(a, b) {            // Dijkstra sur TOUTES les données (les nœuds absents sont affichés ensuite)
-    const poids = { supply: 1, ma: 1.1, concurrence: 1.25 };   // la chaîne de valeur est privilégiée à égalité de sauts
+  function plusCourtChemin(a, b) {
+    const poids = { supply: 1, ma: 1.1, concurrence: 1.25 };
     const dist = {}, prev = {}, vus = {};
     Object.keys(N).forEach(k => { dist[k] = Infinity; });
     dist[a] = 0;
@@ -477,7 +452,7 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     return { noeuds: noeuds.reverse(), liens: liens.reverse() };
   }
 
-  function verbe(lien, de) {                  // formulations neutres : valables pour une société comme pour un groupe
+  function verbe(lien, de) {
     if (lien.type === 'concurrence') return 'concurrence';
     const sortant = lien.source === de;
     if (lien.type === 'supply') return sortant ? 'fournit' : 'a pour fournisseur';
@@ -531,9 +506,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     else masquerBandeau();
   }
 
-  /* ======================================================================= *
-   *  Bandeau d'information
-   * ======================================================================= */
   let actionBandeau = null;
   function bandeau(html, action) {
     $('#mm-bandeau-txt').innerHTML = html;
@@ -542,9 +514,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
   }
   function masquerBandeau() { $('#mm-bandeau').classList.remove('visible'); actionBandeau = null; }
 
-  /* ======================================================================= *
-   *  Fiche latérale
-   * ======================================================================= */
   function pastilles(n) { let s = ''; for (let i = 1; i <= 5; i++) s += i <= n ? '●' : '<i>●</i>'; return s; }
   function demo(n, champ) { return n.satellite || (n.live || []).indexOf(champ) >= 0 ? '' : '<span class="mm-demo" title="Valeur de démonstration">démo</span>'; }
   const aller = id => '<button type="button" class="mm-lien" data-go="' + esc(id) + '">' + esc(N[id].nom) + '</button>';
@@ -580,8 +549,11 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     h += bloc('Clients', clients, simple);
 
     h += '<div class="mm-actions">';
-    if (n.indice) h += '<a class="bouton" href="/run?indice=' + encodeURIComponent(n.indice) + '#' + encodeURIComponent(n.ticker) + '" target="_blank" rel="noopener">Ouvrir dans le Screener</a>';
-    else if (n.ticker) h += '<span class="mm-hors">Hors des indices du screener</span> <a href="https://finance.yahoo.com/quote/' + encodeURIComponent(n.ticker) + '" target="_blank" rel="noopener">Yahoo Finance</a>';
+    if (n.ticker) {
+      const ctx = (DATA.meta && DATA.meta.indice_actif) || '';
+      h += '<a class="bouton" href="/run?ticker=' + encodeURIComponent(n.ticker) + (ctx ? '&indice=' + encodeURIComponent(ctx) : '') + '" target="_blank" rel="noopener">Voir dans le Screener</a>'
+        + ' <a href="https://finance.yahoo.com/quote/' + encodeURIComponent(n.ticker) + '" target="_blank" rel="noopener">Yahoo Finance</a>';
+    }
     h += '</div>';
     if (!n.satellite && (n.live || []).length === 0) h += '<p class="mm-note">Valeurs chiffrées de démonstration : ordres de grandeur, à remplacer par les données en direct.</p>';
     return h;
@@ -604,9 +576,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     if (cy) { cy.elements().unselect(); dessinerMini(); }
   }
 
-  /* ======================================================================= *
-   *  Navigation : clic, recherche
-   * ======================================================================= */
   function clicNoeud(n) {
     const d = n.data(), id = d.id;
     if (etat.modeChemin && d.type === 'societe') { choisirPourChemin(id); return; }
@@ -642,14 +611,11 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     champ.setAttribute('aria-invalid', n ? 'false' : String(!!champ.value.trim()));
     if (!n) return;
     const now = Date.now();
-    if (derniereRecherche.id === n.id && now - derniereRecherche.t < 600) return;     // Entrée déclenche aussi « change »
+    if (derniereRecherche.id === n.id && now - derniereRecherche.t < 600) return;
     derniereRecherche = { id: n.id, t: now };
     allerA(n.id); champ.blur();
   }
 
-  /* ======================================================================= *
-   *  Mini-carte
-   * ======================================================================= */
   const mini = $('#mm-mini'), mctx = mini.getContext('2d'), MW = 200, MH = 140;
   let miniTr = null, miniPlanifie = false;
   (function () { const dpr = window.devicePixelRatio || 1; mini.width = MW * dpr; mini.height = MH * dpr; mctx.setTransform(dpr, 0, 0, dpr, 0, 0); })();
@@ -688,9 +654,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     cy.pan({ x: cy.width() / 2 - mx * cy.zoom(), y: cy.height() / 2 - my * cy.zoom() });
   }
 
-  /* ======================================================================= *
-   *  Info-bulles
-   * ======================================================================= */
   const tip = $('#mm-tip'), scene = $('#mm-scene');
   function placerTip(e) {
     const oe = e && e.originalEvent; if (!oe) return;
@@ -716,14 +679,11 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     return '<strong>' + a + ' ↔ ' + b + '</strong><br>Concurrence directe · intensité ' + l.intensite + '/5<br><span class="mm-meta">' + esc(l.note) + '</span>';
   }
 
-  /* ======================================================================= *
-   *  Initialisation de Cytoscape et des commandes
-   * ======================================================================= */
   function creerCarte() {
     cy = cytoscape({ container: $('#mm-cy'), elements: [], style: construireStyle(), minZoom: 0.15, maxZoom: 3,
                      wheelSensitivity: 0.25, boxSelectionEnabled: false });
 
-    let dernier = { id: null, t: 0 };                    // double-clic détecté à la main (portable, tactile compris)
+    let dernier = { id: null, t: 0 };
     cy.on('tap', 'node', e => {
       const n = e.target, now = Date.now();
       if (dernier.id === n.id() && now - dernier.t < 350) { dernier = { id: null, t: 0 }; focus(n); return; }
@@ -754,6 +714,12 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
   }
 
   function brancherCommandes() {
+    $('#mm-indice').addEventListener('change', e => {
+      const v = e.target.value, u = new URL(window.location.href);
+      if (v) u.searchParams.set('indice', v); else u.searchParams.delete('indice');
+      window.history.replaceState(null, '', u);
+      demarrer(v);
+    });
     $('#mm-bandeau-x').addEventListener('click', () => { const a = actionBandeau; masquerBandeau(); if (a) a(); });
     $('#mm-fiche').addEventListener('click', e => {
       const b = e.target.closest('[data-go]');
@@ -808,9 +774,6 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     });
   }
 
-  /* ======================================================================= *
-   *  Données : structure immédiate, puis valeurs en direct (arrière-plan)
-   * ======================================================================= */
   function appliquerDonnees(data) {
     DATA = data;
     DATA.liensParId = {};
@@ -830,7 +793,7 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
       if (!rep.ok) throw new Error('HTTP ' + rep.status);
       const j = await rep.json();
       if (!j.meta || !j.meta.live) { majSource(null, true); return; }
-      j.noeuds.forEach(nv => {                                   // met à jour les valeurs sans toucher au placement
+      j.noeuds.forEach(nv => {
         const n = N[nv.id]; if (!n) return;
         n.cap = nv.cap; n.per = nv.per; n.ytd = nv.ytd; n.live = nv.live;
         calculer(n);
@@ -844,13 +807,16 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
     } catch (e) { majSource(null, true); }
   }
 
+  let chargement = 0;
   async function demarrer(indiceChoisi) {
     const erreur = $('#mm-erreur');
+    erreur.classList.remove('visible');
     if (typeof cytoscape === 'undefined') {
       erreur.textContent = 'La bibliothèque Cytoscape.js n\'a pas pu être chargée.'; erreur.classList.add('visible'); return;
     }
     const params = new URLSearchParams(window.location.search);
     const indice = indiceChoisi !== undefined ? indiceChoisi : (params.get('indice') || '');
+    const moi = ++chargement;
     $('#mm-source').textContent = indice ? `Chargement de ${indice}…` : 'Chargement…';
 
     let data;
@@ -860,19 +826,27 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
       if (!rep.ok) throw new Error('HTTP ' + rep.status);
       data = await rep.json();
     } catch (e) {
+      if (moi !== chargement) return;
       erreur.textContent = 'Impossible de charger les données (/api/mindmap-data).';
       erreur.classList.add('visible'); return;
     }
+    if (moi !== chargement) return;
+    const actif = (data.meta && data.meta.indice_actif) || '';
 
-    // Remplit le menu déroulant des indices disponibles
     const selIndice = $('#mm-indice');
     if (selIndice && data.meta && data.meta.indices_disponibles) {
       selIndice.innerHTML = '<option value="">Vue globale (Démo M&amp;A)</option>'
-        + data.meta.indices_disponibles.map(ind => `<option value="${esc(ind)}"${ind === indice ? ' selected' : ''}>${esc(ind)}</option>`).join('');
+        + data.meta.indices_disponibles.map(ind => `<option value="${esc(ind)}"${ind === actif ? ' selected' : ''}>${esc(ind)}</option>`).join('');
+    }
+    const retour = $('#mm-retour');
+    if (retour) {
+      retour.href = actif ? '/run?indice=' + encodeURIComponent(actif) : '/';
+      retour.innerHTML = '<i class="fa-solid fa-arrow-left"></i> ' + (actif ? 'Screener · ' + esc(actif) : 'Terminal');
     }
 
     if (cy) { cy.destroy(); cy = null; }
-    etat.secteurs.clear(); etat.focus = null; etat.depart = null; etat.cheminAffiche = false; fermerFiche();
+    etat.secteurs.clear(); etat.focus = null; etat.depart = null; etat.cheminAffiche = false; etat.modeChemin = false;
+    $('#mm-chemin').setAttribute('aria-pressed', 'false'); masquerBandeau(); fermerFiche();
 
     appliquerDonnees(data);
     indexer(data);
@@ -885,12 +859,12 @@ body.mm { margin: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); hei
       .map(n => '<option value="' + esc(n.nom + (n.ticker ? ' (' + n.ticker + ')' : '')) + '"></option>').join('');
 
     poserSecteurs();
-    // Si un indice complet est sélectionné, on déploie automatiquement ses secteurs pour tout voir d'un coup !
-    if (indice) {
+    if (actif) {
       data.secteurs.forEach(s => deployerSecteur(s.id, false));
     }
     appliquerFiltres(); recadrer(); majSource(data.meta, false);
-    if (!indice) chargerEnDirect();
+    if (indice && !actif) bandeau('Indice <strong>' + esc(indice) + '</strong> non pris en charge par la carte : vue globale affichée.');
+    if (!actif) chargerEnDirect();
   }
 
   window.CarteMA = { get cy() { return cy; }, etat, N: () => N, allerA, deployerSecteur, revelerVoisins, plusCourtChemin, calculerChemin,
