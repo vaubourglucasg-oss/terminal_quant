@@ -2,25 +2,26 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
 :root {
-  /* Par défaut : THÈME SOMBRE (dark) */
-  --papier: #0b1120;
-  --surface: #0f172a;
-  --encre: #f8fafc;
-  --muted: #94a3b8;
-  --trait: rgba(255, 255, 255, 0.1);
-  --marine: #38bdf8;
-  --marine-fonce: #0ea5e9;
-  --marine-pale: rgba(56, 189, 248, 0.15);
-  --vert: #34d399;
-  --vert-pale: rgba(52, 211, 153, 0.15);
-  --rouge: #f87171;
-  --rouge-pale: rgba(248, 113, 113, 0.15);
-  --ambre: #fbbf24;
-  --ambre-pale: rgba(251, 191, 36, 0.15);
+  /* THÈME SOMBRE (défaut) : graphite chaud, aplats, filets pleins. Aucun bleu : l'accent est un blanc os,
+     les seules couleurs sont celles des données (vert / rouge / ambre), volontairement adoucies. */
+  --papier: #121211;
+  --surface: #1a1a18;
+  --encre: #ece8df;
+  --muted: #98948a;
+  --trait: #2d2c29;
+  --marine: #e4dece;
+  --marine-fonce: #cdc6b3;
+  --marine-pale: rgba(228, 222, 206, 0.09);
+  --vert: #7fc4a2;
+  --vert-pale: rgba(127, 196, 162, 0.13);
+  --rouge: #de857d;
+  --rouge-pale: rgba(222, 133, 125, 0.13);
+  --ambre: #d9ab55;
+  --ambre-pale: rgba(217, 171, 85, 0.13);
   --police: 'IBM Plex Sans', system-ui, sans-serif;
-  --hover-bg: rgba(255, 255, 255, 0.04);
-  --tr-hover: rgba(255, 255, 255, 0.06);
-  --iframe-bg: #0f172a;
+  --hover-bg: rgba(255, 255, 255, 0.03);
+  --tr-hover: rgba(255, 255, 255, 0.045);
+  --iframe-bg: #1a1a18;
 }
 
 /* Thème clair activé par la classe .light-mode sur le body */
@@ -51,7 +52,7 @@ a { color: var(--marine); }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; color: var(--encre); }
 small, .discret { color: var(--muted); }
 :focus-visible { outline: 2px solid var(--marine); outline-offset: 2px; }
-.nd { color: #9AA7B3; }
+.nd { color: var(--muted); opacity: .7; }
 .pos { color: var(--vert); } .neg { color: var(--rouge); } .amb { color: var(--ambre); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 
