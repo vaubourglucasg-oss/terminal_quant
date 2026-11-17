@@ -19,9 +19,10 @@ os.makedirs(dossier_graphs, exist_ok=True)
 POST_SCRIPT = r"""
 (function () {
   var PAL = {
-    dark:  {fond: '#0f172a', texte: '#e2e8f0', grille: 'rgba(148,163,184,.18)', ligne: 'rgba(148,163,184,.40)',
-            mm50: '#fbbf24', mm200: '#38bdf8', rsi: '#38bdf8', macd: '#38bdf8', signal: '#fbbf24',
-            bande: 'rgba(148,163,184,.50)', remplissage: 'rgba(148,163,184,.10)'},
+    dark:  {fond: '#1a1a18', texte: '#ece8df', grille: 'rgba(152,148,138,.18)', ligne: 'rgba(152,148,138,.40)',
+            mm50: '#d9ab55', mm200: '#e4dece', rsi: '#e4dece', macd: '#e4dece', signal: '#d9ab55',
+            bande: 'rgba(152,148,138,.50)', remplissage: 'rgba(152,148,138,.10)'},
+
     light: {fond: '#ffffff', texte: '#14212C', grille: 'rgba(86,102,118,.15)', ligne: 'rgba(86,102,118,.40)',
             mm50: '#A87510', mm200: '#0D5B7C', rsi: '#0D5B7C', macd: '#0D5B7C', signal: '#A87510',
             bande: 'rgba(86,102,118,.35)', remplissage: 'rgba(86,102,118,.07)'}
