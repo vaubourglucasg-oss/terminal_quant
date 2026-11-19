@@ -9,8 +9,10 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
 from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro, obtenir_taux_sans_risque,
-                                obtenir_benchmark, json_safe, ETAT_ERREURS, normaliser_hypotheses, vider_cache)
+                                obtenir_benchmark, json_safe, ETAT_ERREURS, normaliser_hypotheses, vider_cache,
+                                cle_hypotheses)
 from app.engine.scoring import calculer_scores, normaliser_reglages, _borne
+from app.engine.journal import journaliser_scan
 from app.engine.graphiques import generer_graphique
 from app.engine.sentiment import analyser_actualites
 
@@ -253,6 +255,10 @@ async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = "", r: 
                 if res and (len(lignes) == 10 or len(lignes) % 20 == 0):
                     yield evt("scores", scorer(lignes))      # classement provisoire
             yield evt("scores", scorer(lignes))                # classement définitif
+            # journal des signaux : enregistre l'instantané des scans standard (ne lève jamais d'exception)
+            ok, raison = await asyncio.to_thread(journaliser_scan, indice, lignes, len(tickers), secteurs_cibles,
+                                                 cle_hypotheses(reg["hyp"]) == "")
+            print(f"journal des signaux [{indice}] : {'enregistré' if ok else 'ignoré'} ({raison})")
             yield "event: close\ndata: end\n\n"
         finally:
             for t in taches:
