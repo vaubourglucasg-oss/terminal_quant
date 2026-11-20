@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Administration — Terminal quantitatif</title>
+    <script src="/static/theme.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .admin { max-width: 960px; margin: 0 auto; padding: 32px 24px 60px; }
+        .admin h1 { font-size: 1.5rem; margin-bottom: 4px; }
+        .admin .sous-titre { color: var(--muted); margin-bottom: 28px; }
+        .admin h2 { font-size: 1rem; margin: 28px 0 10px; color: var(--encre); border-bottom: 1px solid var(--trait); padding-bottom: 6px; }
+        .admin-card { background: var(--surface); border: 1px solid var(--trait); border-radius: 6px; padding: 18px 20px; margin-bottom: 14px; }
+        .admin-card dl { margin: 0; }
+        .admin-card dl div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px dotted var(--trait); }
+        .admin-card dt { color: var(--muted); font-size: .88rem; }
+        .admin-card dd { margin: 0; font-weight: 500; text-align: right; }
+        .admin table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+        .admin table th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--trait); }
+        .admin table td { padding: 6px 8px; border-bottom: 1px solid var(--trait); }
+        .admin-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+        .admin-result { background: var(--vert-pale); color: var(--vert); padding: 10px 14px; border-radius: 4px; font-size: .88rem; margin-bottom: 14px; }
+        .btn-danger { font: inherit; font-weight: 600; background: var(--rouge-pale); color: var(--rouge); border: 1px solid var(--rouge); border-radius: 4px; padding: 8px 16px; cursor: pointer; }
+        .btn-danger:hover { background: var(--rouge); color: var(--papier); }
+        .nav-retour { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .nav-retour a { color: var(--marine); font-size: .88rem; }
+    </style>
+</head>
+<body>
+<div class="admin">
+    <div class="nav-retour">
+        <div>
+            <h1>Administration</h1>
+            <p class="sous-titre">Connecte en tant que {{ user.email }}</p>
+        </div>
+        <div>
+            <a href="/">Retour au terminal</a>
+            <form method="POST" action="/logout" style="display:inline; margin-left: 12px;">
+                <button type="submit" class="theme-btn" style="font-size:.82rem;">Deconnexion</button>
+            </form>
+        </div>
+    </div>
+
+    {% if resultat %}
+    <div class="admin-result">{{ resultat }}</div>
+    {% endif %}
+
+    <!-- Cache -->
+    <h2>Cache des analyses</h2>
+    <div class="admin-card">
+        <dl>
+            <div><dt>Fichier</dt><dd>{{ cache.fichier }}</dd></div>
+            <div><dt>Taille</dt><dd>{{ cache.taille_mo }} Mo</dd></div>
+            {% for nom, nb in cache.tables.items() %}
+            <div><dt>Table {{ nom }}</dt><dd>{{ nb }} entrees</dd></div>
+            {% endfor %}
+        </dl>
+        <div class="admin-actions">
+            <form method="POST" action="/admin/vider-cache" onsubmit="return confirm('Vider tout le cache des analyses ?');">
+                <button type="submit" class="btn-danger">Vider le cache</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Journal des signaux -->
+    <h2>Journal des signaux</h2>
+    <div class="admin-card">
+        <dl>
+            <div><dt>Scans enregistres</dt><dd>{{ journal.scans }}</dd></div>
+            <div><dt>Signaux totaux</dt><dd>{{ journal.signaux }}</dd></div>
+            <div><dt>Premier jour</dt><dd>{{ journal.premier_jour or '–' }}</dd></div>
+            <div><dt>Dernier jour</dt><dd>{{ journal.dernier_jour or '–' }}</dd></div>
+            <div><dt>Version du calcul</dt><dd>{{ journal.version_actuelle }}</dd></div>
+        </dl>
+        {% if journal.derniers_scans %}
+        <h3 style="font-size:.85rem; margin:14px 0 6px; color:var(--muted);">Derniers scans</h3>
+        <table>
+            <thead><tr><th>Jour</th><th>Indice</th><th>Titres</th><th>Version</th></tr></thead>
+            <tbody>
+            {% for s in journal.derniers_scans %}
+            <tr><td>{{ s.jour }}</td><td>{{ s.indice }}</td><td>{{ s.titres }} / {{ s.demandes }}</td><td>{{ s.version[:8] }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        <div class="admin-actions" style="margin-top:14px;">
+            <a href="/api/journal/export.csv" class="theme-btn" style="text-decoration:none;">Telecharger le journal (CSV)</a>
+        </div>
+    </div>
+
+    <!-- Utilisateurs -->
+    <h2>Utilisateurs inscrits</h2>
+    <div class="admin-card">
+        <table>
+            <thead><tr><th>ID</th><th>E-mail</th><th>Role</th><th>Inscrit le</th></tr></thead>
+            <tbody>
+            {% for u in utilisateurs %}
+            <tr>
+                <td>{{ u.id }}</td>
+                <td>{{ u.email }}</td>
+                <td>{{ u.role }}</td>
+                <td>{{ u.cree_le }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+</body>
+</html>

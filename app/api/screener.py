@@ -4,7 +4,7 @@ import json
 import asyncio
 
 import pandas as pd
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
@@ -13,7 +13,8 @@ from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro,
                                 cle_hypotheses)
 from app.engine.scoring import calculer_scores, normaliser_reglages, _borne
 from app.engine.journal import journaliser_scan
-from app.engine.graphiques import generer_graphique
+from app.engine.graphiques import generer_graphique, PERIODES_VALIDES
+from app.api.auth_routes import require_admin
 from app.engine.sentiment import analyser_actualites
 
 router = APIRouter()
@@ -285,8 +286,9 @@ async def recalculer_scores(request: Request):
 
 
 @router.post("/api/cache/vider")
-async def vider_le_cache():
-    """Efface les analyses en cache et les données macro en mémoire (utile après une série d'erreurs Yahoo)."""
+async def vider_le_cache(user: dict = Depends(require_admin)):
+    """Efface les analyses en cache et les données macro en mémoire (utile après une série d'erreurs Yahoo).
+    Réservé aux administrateurs."""
     return {"supprimes": await asyncio.to_thread(vider_cache)}
 
 
@@ -312,10 +314,12 @@ async def titre_isole(ticker: str):
 
 
 @router.get("/graph/{ticker}")
-async def graphique(ticker: str):
+async def graphique(ticker: str, periode: str = "1y"):
     if not RE_TICKER.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker invalide")
-    chemin = await asyncio.to_thread(generer_graphique, ticker)
+    if periode not in PERIODES_VALIDES:
+        periode = "1y"
+    chemin = await asyncio.to_thread(generer_graphique, ticker, periode)
     if chemin and os.path.exists(chemin):
         return FileResponse(chemin, headers=SANS_CACHE)
     return HTMLResponse("<p style='font-family:sans-serif;padding:1rem'>Graphique indisponible pour ce titre.</p>", status_code=404)

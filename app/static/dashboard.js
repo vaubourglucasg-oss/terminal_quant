@@ -219,7 +219,19 @@ $(function () {
         <button type="button" class="lien-bouton" data-action="actus" data-ticker="${esc(r.ticker)}">Voir les actualités</button>
         <a href="${esc(r.url)}" target="_blank" rel="noopener">Profil Yahoo Finance</a>
       </div>
-      <div class="actus"></div><div class="zone-graph"></div>
+      <div class="actus"></div>
+      <div class="zone-graph">
+        <div class="graph-periodes" style="display:none;" data-ticker="${esc(r.ticker)}">
+          <button type="button" class="periode-btn" data-periode="1mo">1M</button>
+          <button type="button" class="periode-btn" data-periode="3mo">3M</button>
+          <button type="button" class="periode-btn" data-periode="6mo">6M</button>
+          <button type="button" class="periode-btn actif" data-periode="1y">1A</button>
+          <button type="button" class="periode-btn" data-periode="5y">5A</button>
+          <button type="button" class="periode-btn" data-periode="max">Max</button>
+        </div>
+        <div class="graph-loading" style="display:none; padding:18px 0; color:var(--muted); font-size:.88rem;">Chargement du graphique...</div>
+        <div class="graph-frame"></div>
+      </div>
     </div>`;
   }
 
@@ -232,10 +244,33 @@ $(function () {
     else { row.child(detailHtml(r), 'detail-ligne').show(); $(this).addClass('ouvert'); }
   });
 
+  // ---------- sélecteur de périodes du graphique ----------
+  $('#tbl tbody').on('click', '.periode-btn', function (e) {
+    e.stopPropagation();
+    const btn = $(this);
+    const container = btn.closest('.zone-graph');
+    const tk = btn.closest('.graph-periodes').data('ticker');
+    const periode = btn.data('periode');
+    // Mettre à jour l'état actif
+    btn.siblings('.periode-btn').removeClass('actif');
+    btn.addClass('actif');
+    // Afficher le chargement
+    container.find('.graph-loading').show();
+    container.find('.graph-frame').html('');
+    // Charger le nouveau graphique
+    const theme = window.Theme ? window.Theme.get() : 'dark';
+    const iframe = `<iframe src="/graph/${encodeURIComponent(tk)}?periode=${periode}#${theme}" title="Graphique ${esc(tk)} (${periode})" loading="lazy" onload="$(this).closest('.zone-graph').find('.graph-loading').hide();"></iframe>`;
+    container.find('.graph-frame').html(iframe);
+  });
+
   $('#tbl tbody').on('click', 'button[data-action]', function () {
     const tk = this.dataset.ticker, zone = $(this).closest('.detail');
     if (this.dataset.action === 'graph') {
-      zone.find('.zone-graph').html(`<iframe src="/graph/${encodeURIComponent(tk)}#${window.Theme ? window.Theme.get() : 'dark'}" title="Graphique ${esc(tk)}" loading="lazy"></iframe>`);
+      const container = zone.find('.zone-graph');
+      container.find('.graph-periodes').show();
+      container.find('.graph-loading').show();
+      const theme = window.Theme ? window.Theme.get() : 'dark';
+      container.find('.graph-frame').html(`<iframe src="/graph/${encodeURIComponent(tk)}?periode=1y#${theme}" title="Graphique ${esc(tk)}" loading="lazy" onload="$(this).closest('.zone-graph').find('.graph-loading').hide();"></iframe>`);
     } else {
       const cible = zone.find('.actus').text('Chargement…');
       fetch(`/api/detail/${encodeURIComponent(tk)}`).then(r => r.json()).then(d => {

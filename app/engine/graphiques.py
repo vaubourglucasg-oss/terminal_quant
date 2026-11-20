@@ -12,6 +12,11 @@ dossier_base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 dossier_graphs = os.path.join(dossier_base, "graphs")
 os.makedirs(dossier_graphs, exist_ok=True)
 
+# Périodes autorisées et correspondances yfinance / affichage
+PERIODES_VALIDES = {"1mo", "3mo", "6mo", "1y", "5y", "max"}
+LABELS_PERIODES = {"1mo": "1 mois", "3mo": "3 mois", "6mo": "6 mois", "1y": "1 an", "5y": "5 ans", "max": "Maximum"}
+# Nombre de jours ouvrés à conserver pour l'axe (tail) ; None = tout garder
+TAIL_PERIODES = {"1mo": 23, "3mo": 65, "6mo": 130, "1y": 252, "5y": 1260, "max": None}
 
 
 # Script exécuté dans la page du graphique : applique le thème sombre/clair sans régénérer le fichier.
@@ -68,17 +73,32 @@ POST_SCRIPT = r"""
 HAUSSE, BAISSE = "#1FA37A", "#D4455A"      # teintes lisibles sur fond clair ET sombre
 
 
-def _fichier(ticker_symbol):
-    return os.path.join(dossier_graphs, f"{ticker_symbol.replace('/', '_')}.html")
+def _fichier(ticker_symbol, periode="1y"):
+    """Nom du fichier cache incluant la période pour éviter les collisions."""
+    safe_ticker = ticker_symbol.replace('/', '_')
+    return os.path.join(dossier_graphs, f"{safe_ticker}_{periode}.html")
 
 
-def generer_graphique(ticker_symbol, validite_secondes=6 * 3600):
+def generer_graphique(ticker_symbol, periode="1y", validite_secondes=6 * 3600):
     """Retourne le chemin du fichier HTML (réutilisé s'il a moins de 6 h) ou None."""
-    chemin = _fichier(ticker_symbol)
+    if periode not in PERIODES_VALIDES:
+        periode = "1y"
+    chemin = _fichier(ticker_symbol, periode)
     if os.path.exists(chemin) and time.time() - os.path.getmtime(chemin) < validite_secondes:
         return chemin
     try:
-        df = yf.Ticker(ticker_symbol).history(period="2y")
+        # Télécharger suffisamment de données pour les moyennes mobiles (MM200 nécessite ~200 jours de plus)
+        yf_period = periode
+        if periode in ("1mo", "3mo", "6mo"):
+            yf_period = "2y"      # on prend 2 ans puis on tronque, pour avoir la MM200
+        elif periode == "1y":
+            yf_period = "2y"
+        elif periode == "5y":
+            yf_period = "10y"
+        else:
+            yf_period = "max"
+
+        df = yf.Ticker(ticker_symbol).history(period=yf_period)
         if df.empty:
             return None
         c = df["Close"]
@@ -88,8 +108,13 @@ def generer_graphique(ticker_symbol, validite_secondes=6 * 3600):
         macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
         signal = macd.ewm(span=9, adjust=False).mean()
         df["RSI"] = calculer_rsi(c)
-        d = df.tail(252)
+
+        tail_n = TAIL_PERIODES.get(periode)
+        d = df.tail(tail_n) if tail_n else df
         macd, signal = macd.loc[d.index], signal.loc[d.index]
+
+        label = LABELS_PERIODES.get(periode, periode)
+        titre_graph = f"{ticker_symbol} — {label}"
 
         fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.025,
                             row_heights=[0.5, 0.14, 0.18, 0.18])
@@ -115,7 +140,8 @@ def generer_graphique(ticker_symbol, validite_secondes=6 * 3600):
         fig.add_trace(go.Bar(x=d.index, y=macd - signal, name="Histogramme",
                              marker_color=[HAUSSE if v >= 0 else BAISSE for v in (macd - signal)]), row=4, col=1)
         fig.update_layout(template="plotly_white", xaxis_rangeslider_visible=False, height=720,
-                          margin=dict(l=40, r=20, t=30, b=20), legend=dict(orientation="h", y=1.04),
+                          title=dict(text=titre_graph, font=dict(size=14)),
+                          margin=dict(l=40, r=20, t=40, b=20), legend=dict(orientation="h", y=1.04),
                           font=dict(family="IBM Plex Sans, sans-serif", size=12, color="#14212C"))
         fig.write_html(chemin, include_plotlyjs="cdn", post_script=POST_SCRIPT)
         return chemin
