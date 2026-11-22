@@ -5,21 +5,45 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Connexion — Terminal quantitatif</title>
     <script src="/static/theme.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        .auth-page { max-width: 400px; margin: 80px auto; padding: 0 24px; }
-        .auth-page h1 { font-size: 1.5rem; margin-bottom: 6px; }
-        .auth-page .sous-titre { color: var(--muted); margin-bottom: 28px; }
-        .auth-form { background: var(--surface); border: 1px solid var(--trait); border-radius: 6px; padding: 28px 24px; }
-        .auth-form label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 14px; }
+        :root {
+            --papier: #121211;
+            --surface: #1a1a18;
+            --encre: #ece8df;
+            --muted: #98948a;
+            --trait: #2d2c29;
+            --marine: #e4dece;
+            --marine-fonce: #cdc6b3;
+            --rouge-pale: rgba(222, 133, 125, 0.13);
+            --rouge: #de857d;
+        }
+        body {
+            margin: 0;
+            font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--papier, #121211);
+            color: var(--encre, #ece8df);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .auth-page { width: 100%; max-width: 400px; margin: 0 auto; }
+        .auth-page h1 { font-size: 1.6rem; margin: 0 0 6px; font-weight: 600; color: var(--encre, #ece8df); }
+        .auth-page .sous-titre { color: var(--muted, #98948a); margin: 0 0 24px; font-size: 0.95rem; }
+        .auth-form { background: var(--surface, #1a1a18); border: 1px solid var(--trait, #2d2c29); border-radius: 6px; padding: 28px 24px; box-sizing: border-box; }
+        .auth-form label { display: block; font-size: .85rem; color: var(--muted, #98948a); margin-bottom: 16px; }
         .auth-form input[type=email],
-        .auth-form input[type=password] { width: 100%; font: inherit; font-size: .95rem; padding: 9px 10px; border: 1px solid var(--trait); border-radius: 4px; background: var(--papier); color: var(--encre); margin-top: 4px; }
-        .auth-form input:focus { border-color: var(--marine); outline: none; }
-        .auth-form .bouton { width: 100%; margin-top: 8px; }
-        .auth-erreur { background: var(--rouge-pale); color: var(--rouge); padding: 8px 12px; border-radius: 4px; font-size: .88rem; margin-bottom: 14px; }
-        .auth-lien { text-align: center; margin-top: 16px; font-size: .88rem; color: var(--muted); }
-        .auth-lien a { color: var(--marine); }
+        .auth-form input[type=password] { width: 100%; font: inherit; font-size: .95rem; padding: 10px 12px; border: 1px solid var(--trait, #2d2c29); border-radius: 4px; background: var(--papier, #121211); color: var(--encre, #ece8df); margin-top: 6px; box-sizing: border-box; }
+        .auth-form input:focus { border-color: var(--marine, #e4dece); outline: none; }
+        .auth-form .bouton { width: 100%; margin-top: 10px; font: inherit; font-weight: 600; background: var(--marine, #e4dece); color: var(--papier, #121211); border: 0; border-radius: 4px; padding: 10px 18px; cursor: pointer; transition: background .15s ease; }
+        .auth-form .bouton:hover { background: var(--marine-fonce, #cdc6b3); }
+        .auth-erreur { background: var(--rouge-pale, rgba(222, 133, 125, 0.13)); color: var(--rouge, #de857d); padding: 10px 12px; border-radius: 4px; font-size: .88rem; margin-bottom: 16px; border: 1px solid var(--rouge, #de857d); }
+        .auth-lien { text-align: center; margin-top: 20px; font-size: .88rem; color: var(--muted, #98948a); }
+        .auth-lien a { color: var(--marine, #e4dece); text-decoration: none; font-weight: 500; }
+        .auth-lien a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -45,7 +69,7 @@
         </form>
     </div>
 
-    <p class="auth-lien">Pas de compte ? <a href="/register">Creer un compte</a></p>
+    <p class="auth-lien">Pas de compte ? <a href="/register">Créer un compte</a></p>
 </div>
 </body>
 </html>

@@ -23,12 +23,13 @@ app = FastAPI(
 )
 
 # Gestion sécurisée des sessions (cookie HttpOnly signé)
+HTTPS_ONLY = os.environ.get("HTTPS_ONLY", "false").lower() in ("true", "1")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
     session_cookie="tq_session",
     max_age=7 * 24 * 3600,
-    https_only=False,
+    https_only=HTTPS_ONLY,
     same_site="lax"
 )
 

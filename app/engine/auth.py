@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import bcrypt
 
 racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.path.join(racine, "users.db")
+DB_PATH = os.environ.get("USERS_DB") or os.path.join(racine, "users.db")
 
 
 def hacher_mot_de_passe(mot_de_passe: str) -> str:
@@ -47,10 +47,13 @@ CREATE TABLE IF NOT EXISTS users (
 
 
 def _conn():
+    dossier = os.path.dirname(DB_PATH)
+    if dossier:
+        os.makedirs(dossier, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(_DDL)
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -60,10 +63,13 @@ def admin_email_configure() -> str:
 
 
 def init_db():
-    """Initialise la base au démarrage de l'application."""
+    """Initialise la base au démarrage de l'application et crée la table si elle n'existe pas."""
     with _verrou:
         conn = _conn()
-        conn.close()
+        try:
+            conn.executescript(_DDL)
+        finally:
+            conn.close()
 
 
 def creer_ou_mettre_a_jour_admin(email: str, mot_de_passe: str) -> dict:
