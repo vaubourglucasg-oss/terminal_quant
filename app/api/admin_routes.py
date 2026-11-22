@@ -5,6 +5,7 @@ Toutes les routes exigent le role admin via Depends(require_admin).
 import asyncio
 import os
 import sqlite3
+from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import HTMLResponse
@@ -16,7 +17,9 @@ from app.engine import journal
 from app.engine.fetcher import vider_cache
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+TEMPLATES_DIR = BASE_DIR / "app" / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 db_cache_path = os.path.join(racine, "cache_bourse_v3.db")

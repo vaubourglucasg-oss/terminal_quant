@@ -6,8 +6,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+
+from app.api.auth_routes import get_current_user
 
 router = APIRouter()
 PAGE = Path(__file__).resolve().parent.parent / "templates" / "mindmap.html"
@@ -508,7 +510,10 @@ def _fusionner(base, cours):
 
 
 @router.get("/mindmap", response_class=HTMLResponse)
-async def page_mindmap():
+async def page_mindmap(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
     if not PAGE.exists():
         return HTMLResponse("<p style='font-family:sans-serif;padding:1rem'>app/templates/mindmap.html est introuvable.</p>",
                             status_code=404)

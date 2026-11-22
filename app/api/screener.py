@@ -2,10 +2,11 @@ import os
 import re
 import json
 import asyncio
+from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro, obtenir_taux_sans_risque,
@@ -14,11 +15,13 @@ from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro,
 from app.engine.scoring import calculer_scores, normaliser_reglages, _borne
 from app.engine.journal import journaliser_scan
 from app.engine.graphiques import generer_graphique, PERIODES_VALIDES
-from app.api.auth_routes import require_admin
+from app.api.auth_routes import require_admin, get_current_user
 from app.engine.sentiment import analyser_actualites
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/templates")
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+TEMPLATES_DIR = BASE_DIR / "app" / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 SANS_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 DELAI_MACRO, DELAI_RF, DELAI_BENCH, DELAI_LISTE = 25, 10, 15, 20     # secondes : un Yahoo lent ne doit pas bloquer la page
 CONCURRENCE = 6                      # téléchargements simultanés (au-delà, Yahoo limite le débit)
@@ -178,22 +181,33 @@ async def _contexte():
 # =========================================================================
 @router.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
     macro, recoms, regions, tops = await _contexte()
-    return templates.TemplateResponse(request, "index.html", {
+    return templates.TemplateResponse(request=request, name="index.html", context={
+        "user": user,
         "regions": regions, "macro": contexte_macro(macro), "defaut": tops[0] if tops else "CAC 40",
         "tops": tops[:3], "secteurs": SECTEURS}, headers=SANS_CACHE)
 
 
 @router.get("/run", response_class=HTMLResponse)
 async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str = ""):
+    user = await get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
     _, _, regions, _ = await _contexte()
     cfg = {"indice": indice, "secteur": secteur if secteur in SECTEURS else ""}
-    return templates.TemplateResponse(request, "dashboard.html", {
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={
+        "user": user,
         "indice": indice, "secteur": cfg["secteur"], "regions": regions, "cfg": cfg}, headers=SANS_CACHE)
 
 
 @router.get("/stream")
-async def flux_donnees_temps_reel(indice: str = "CAC 40", secteur: str = "", r: str = ""):
+async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", secteur: str = "", r: str = ""):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Connexion requise")
     secteurs_cibles = [secteur] if secteur in SECTEURS else []
     try:
         reg = lire_reglages(json.loads(r) if r else {})

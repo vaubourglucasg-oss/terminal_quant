@@ -50,6 +50,15 @@
             <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème">
                 <i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span>
             </button>
+            {% if user %}
+            <span style="font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-user"></i> {{ user.email }}
+                {% if user.role == 'admin' %}
+                <a href="/admin" class="theme-btn" style="text-decoration:none; font-size:0.8rem; padding: 4px 8px;">Admin</a>
+                {% endif %}
+            </span>
+            <button type="submit" form="form-logout" class="theme-btn" style="font-size:0.8rem; cursor:pointer; padding: 4px 8px;">Déconnexion</button>
+            {% endif %}
             <label>Secteur
                 <select name="secteur">
                     <option value="">Tous les secteurs</option>
@@ -60,5 +69,8 @@
         </div>
     </div>
 </form>
+{% if user %}
+<form id="form-logout" method="POST" action="/logout" style="display:none;"></form>
+{% endif %}
 </body>
 </html>
