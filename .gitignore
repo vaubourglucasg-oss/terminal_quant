@@ -1,12 +1,14 @@
 __pycache__/
-cache_bourse_v2.db
-cache_bourse_v3.db
+cache_bourse_v2.db*
+cache_bourse_v3.db*
 .env
-journal_signaux.db
 journal_signaux.db*
-users.db
 users.db*
 graphs/
+
+*.db
+*.db-wal
+*.db-shm
 
 *.db
 *.db-wal

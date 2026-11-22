@@ -1,21 +1,20 @@
 import os
+import secrets
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from app.api.screener import router as api_router
-from app.api.mindmap_routes import router as mindmap_router  # juste sous l'import de api_router
+from app.api.mindmap_routes import router as mindmap_router
 from app.api.journal_routes import router as journal_router
 from app.api.auth_routes import router as auth_router
 from app.api.admin_routes import router as admin_router
 from app.engine.auth import init_db, creer_ou_mettre_a_jour_admin
 
-# Configuration du compte administrateur et de la session
-ADMIN_EMAIL_DEFAUT = "vaubourg.lucasg@gmail.com"
-ADMIN_PASSWORD_DEFAUT = "Lucas.a380"
-
-os.environ.setdefault("ADMIN_EMAIL", ADMIN_EMAIL_DEFAUT)
-os.environ.setdefault("SESSION_SECRET", os.environ.get("SESSION_SECRET", "Lucas.a380"))
+# Configuration stricte via variables d'environnement
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
+SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_hex(32)
 
 app = FastAPI(
     title="Terminal Quantitatif SaaS",
@@ -23,8 +22,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Clé secrète pour signer les sessions (cookie HttpOnly)
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "Lucas.a380")
+# Gestion sécurisée des sessions (cookie HttpOnly signé)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -36,19 +34,21 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# FIXATION DU DOSSIER STATIQUE : Pointer vers app/static (et non app/templates)
+# Montage des fichiers statiques
 STATIC_DIR = BASE_DIR / "app" / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Enregistrement des routes modulaires
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(api_router)
 app.include_router(mindmap_router)
 app.include_router(journal_router)
 
-# Initialiser la base utilisateurs et enregistrer/mettre à jour l'administrateur
+# Initialisation de la base utilisateurs et synchronisation du compte admin si configuré
 init_db()
-creer_ou_mettre_a_jour_admin(ADMIN_EMAIL_DEFAUT, ADMIN_PASSWORD_DEFAUT)
+if ADMIN_EMAIL and ADMIN_PASSWORD:
+    creer_ou_mettre_a_jour_admin(ADMIN_EMAIL, ADMIN_PASSWORD)
 
 @app.middleware("http")
 async def desactiver_cache_navigateur(request: Request, call_next):
