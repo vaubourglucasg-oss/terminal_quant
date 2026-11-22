@@ -94,15 +94,19 @@ def creer_ou_mettre_a_jour_admin(email: str, mot_de_passe: str) -> dict:
 
 
 def creer_utilisateur(email: str, mot_de_passe: str) -> dict | None:
-    """Crée un utilisateur. Retourne le dict utilisateur ou None si l'email existe déjà."""
+    """Crée un utilisateur. Retourne le dict utilisateur ou None si l'email existe déjà.
+    Le premier utilisateur inscrit ou l'adresse ADMIN_EMAIL obtient automatiquement le rôle admin.
+    """
     email = email.strip().lower()
     hache = hacher_mot_de_passe(mot_de_passe)
     admin_cible = admin_email_configure()
-    role = "admin" if (admin_cible and email == admin_cible) else "user"
     maintenant = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _verrou:
         conn = _conn()
         try:
+            nb_existants = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            # Le premier utilisateur inscrit devient automatiquement admin, ou si l'email correspond à ADMIN_EMAIL
+            role = "admin" if (nb_existants == 0 or (admin_cible and email == admin_cible)) else "user"
             conn.execute("INSERT INTO users (email, password_hash, role, cree_le) VALUES (?, ?, ?, ?)",
                          (email, hache, role, maintenant))
             conn.commit()
@@ -117,14 +121,21 @@ def creer_utilisateur(email: str, mot_de_passe: str) -> dict | None:
 def authentifier(email: str, mot_de_passe: str) -> dict | None:
     """Vérifie les identifiants. Retourne le dict utilisateur ou None."""
     email = email.strip().lower()
+    admin_cible = admin_email_configure()
     with _verrou:
         conn = _conn()
         try:
             row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+            if row and verifier_mot_de_passe(mot_de_passe, row["password_hash"]):
+                # S'assurer que le rôle admin est bien attribué si c'est l'admin cible ou le seul utilisateur
+                nb_total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                if row["role"] != "admin" and (nb_total == 1 or (admin_cible and email == admin_cible)):
+                    conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (row["id"],))
+                    conn.commit()
+                    row = conn.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+                return dict(row)
         finally:
             conn.close()
-    if row and verifier_mot_de_passe(mot_de_passe, row["password_hash"]):
-        return dict(row)
     return None
 
 

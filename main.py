@@ -11,7 +11,22 @@ from app.api.auth_routes import router as auth_router
 from app.api.admin_routes import router as admin_router
 from app.engine.auth import init_db, creer_ou_mettre_a_jour_admin
 
-# Configuration stricte via variables d'environnement
+BASE_DIR = Path(__file__).resolve().parent
+
+# Chargement automatique du fichier .env si présent (local ou volume monté)
+env_path = BASE_DIR / ".env"
+if env_path.exists():
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+    except Exception:
+        pass
+
+# Configuration via variables d'environnement
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_hex(32)
@@ -32,8 +47,6 @@ app.add_middleware(
     https_only=HTTPS_ONLY,
     same_site="lax"
 )
-
-BASE_DIR = Path(__file__).resolve().parent
 
 # Montage des fichiers statiques
 STATIC_DIR = BASE_DIR / "app" / "static"
