@@ -62,14 +62,13 @@
             <div style="display: flex; gap: 8px; align-items: center;">
                 <label for="select-purge-indice" style="font-size: .85rem; color: var(--muted);">Purger par indice :</label>
                 <select id="select-purge-indice" style="background: var(--fond); color: var(--encre); border: 1px solid var(--trait); padding: 5px 8px; border-radius: 4px; font-size: .85rem;">
-                    <option value="CAC 40">CAC 40</option>
-                    <option value="S&P 500">S&P 500</option>
-                    <option value="NASDAQ 100">NASDAQ 100</option>
-                    <option value="CSI 300">CSI 300</option>
-                    <option value="DAX 40">DAX 40</option>
-                    <option value="Euro Stoxx 50">Euro Stoxx 50</option>
-                    <option value="FTSE 100">FTSE 100</option>
-                    <option value="Nikkei 225">Nikkei 225</option>
+                    {% for region, indices in regions.items() %}
+                    <optgroup label="{{ region }}">
+                        {% for idx in indices %}
+                        <option value="{{ idx }}">{{ idx }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endfor %}
                 </select>
                 <button type="button" id="btn-purger-indice" class="theme-btn" style="font-size: .82rem;">Purger l'indice</button>
             </div>

@@ -3,6 +3,9 @@ window.Quant = window.Quant || {};
 
 $(function () {
   const CFG = window.CFG;
+  if (window.Reglages && CFG && CFG.indice) {
+    window.Reglages.set('dernier_indice', CFG.indice);
+  }
   let favoris = {};
   try { favoris = JSON.parse(localStorage.getItem('quant_favoris') || '{}'); } catch (e) { favoris = {}; }
 
@@ -157,10 +160,40 @@ $(function () {
     }
     return true;
   });
-  $('.filtres input, .filtres select').on('input change', () => { $('.presets button').attr('aria-pressed', 'false'); table.draw(); });
+  const MAP_FILTRES = {
+    secteur: '#f-secteur', signal: '#f-signal', fav: '#f-fav', altman: '#f-altman',
+    score: '#f-score', per: '#f-per', roic: '#f-roic', marge: '#f-marge', pio: '#f-pio', div: '#f-div'
+  };
+
+  function sauverFiltres() {
+    if (!window.Reglages) return;
+    const etat = {};
+    Object.entries(MAP_FILTRES).forEach(([cle, sel]) => { etat[cle] = String($(sel).val() || ''); });
+    window.Reglages.set('filtres_tableau', etat);
+  }
+
+  function restaurerFiltres() {
+    if (!window.Reglages) return;
+    const f = window.Reglages.lire('filtres_tableau') || {};
+    Object.entries(MAP_FILTRES).forEach(([cle, sel]) => {
+      if (f[cle] !== undefined && f[cle] !== null) $(sel).val(f[cle]);
+    });
+    table.draw();
+  }
+
+  restaurerFiltres();
+  if (window.Reglages) {
+    window.Reglages.onChange(chemin => { if (chemin === '*') restaurerFiltres(); });
+  }
+
+  $('.filtres input, .filtres select').on('input change', () => {
+    $('.presets button').attr('aria-pressed', 'false');
+    sauverFiltres();
+    table.draw();
+  });
 
   const PRESETS = {
-    decote: { '#f-marge': 15, '#f-per': 15, '#f-score': 60 }, // Anciens seuils plus stricts
+    decote: { '#f-marge': 15, '#f-per': 15, '#f-score': 60 },
     qualite: { '#f-roic': 12, '#f-pio': 6, '#f-score': 60 },
     dividende: { '#f-div': 3.5, '#f-pio': 5, '#f-altman': 'sain' },
     solidite: { '#f-pio': 7, '#f-altman': 'sain', '#f-score': 50 },
@@ -171,6 +204,7 @@ $(function () {
     Object.entries(PRESETS[this.dataset.preset] || {}).forEach(([sel, v]) => $(sel).val(v));
     $('.presets button').attr('aria-pressed', 'false');
     if (this.dataset.preset !== 'reset') $(this).attr('aria-pressed', 'true');
+    sauverFiltres();
     table.draw();
   });
 
@@ -272,6 +306,29 @@ $(function () {
     else { row.child(detailHtml(r), 'detail-ligne').show(); $(this).addClass('ouvert'); }
   });
 
+  // ---------- chargement dynamique et robuste du graphique ----------
+  function chargerGraphiqueIframe(container, tk, periode) {
+    const frame = container.find('.graph-frame');
+    const loading = container.find('.graph-loading');
+    loading.text('Chargement du graphique...').show();
+    frame.empty();
+
+    const theme = window.Theme ? window.Theme.get() : 'dark';
+    const iframe = document.createElement('iframe');
+    iframe.title = `Graphique ${esc(tk)} (${periode})`;
+    iframe.loading = 'lazy';
+    iframe.src = `/graph/${encodeURIComponent(tk)}?periode=${encodeURIComponent(periode)}#${theme}`;
+
+    iframe.addEventListener('load', function () {
+      loading.hide();
+    });
+    iframe.addEventListener('error', function () {
+      loading.html('<span style="color:var(--rouge);">Impossible de charger le graphique pour cette période.</span>');
+    });
+
+    frame.append(iframe);
+  }
+
   // ---------- sélecteur de périodes du graphique ----------
   $('#tbl tbody').on('click', '.periode-btn', function (e) {
     e.stopPropagation();
@@ -279,16 +336,9 @@ $(function () {
     const container = btn.closest('.zone-graph');
     const tk = btn.closest('.graph-periodes').data('ticker');
     const periode = btn.data('periode');
-    // Mettre à jour l'état actif
     btn.siblings('.periode-btn').removeClass('actif');
     btn.addClass('actif');
-    // Afficher le chargement
-    container.find('.graph-loading').show();
-    container.find('.graph-frame').html('');
-    // Charger le nouveau graphique
-    const theme = window.Theme ? window.Theme.get() : 'dark';
-    const iframe = `<iframe src="/graph/${encodeURIComponent(tk)}?periode=${periode}#${theme}" title="Graphique ${esc(tk)} (${periode})" loading="lazy" onload="$(this).closest('.zone-graph').find('.graph-loading').hide();"></iframe>`;
-    container.find('.graph-frame').html(iframe);
+    chargerGraphiqueIframe(container, tk, periode);
   });
 
   $('#tbl tbody').on('click', 'button[data-action]', function () {
@@ -296,9 +346,7 @@ $(function () {
     if (this.dataset.action === 'graph') {
       const container = zone.find('.zone-graph');
       container.find('.graph-periodes').show();
-      container.find('.graph-loading').show();
-      const theme = window.Theme ? window.Theme.get() : 'dark';
-      container.find('.graph-frame').html(`<iframe src="/graph/${encodeURIComponent(tk)}?periode=1y#${theme}" title="Graphique ${esc(tk)}" loading="lazy" onload="$(this).closest('.zone-graph').find('.graph-loading').hide();"></iframe>`);
+      chargerGraphiqueIframe(container, tk, '1y');
     } else {
       const cible = zone.find('.actus').text('Chargement…');
       fetch(`/api/detail/${encodeURIComponent(tk)}`).then(r => r.json()).then(d => {

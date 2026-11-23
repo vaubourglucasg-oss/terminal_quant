@@ -222,7 +222,7 @@ def obtenir_favoris(user_id: int) -> list[str]:
     with _verrou:
         conn = _conn()
         try:
-            rows = conn.execute("SELECT ticker FROM user_favorites WHERE user_id = ? ORDER BY ajoute_le ASC",
+            rows = conn.execute("SELECT ticker FROM user_favorites WHERE user_id = ? ORDER BY rowid ASC",
                                 (user_id,)).fetchall()
             return [r["ticker"] for r in rows]
         finally:

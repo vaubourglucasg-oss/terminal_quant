@@ -285,3 +285,52 @@ html.light-mode.daltonien { --vert: #0B6FBF; --vert-pale: #DCEBF8; --rouge: #B85
 #prm-attente { color: var(--ambre); }
 #prm-relancer { margin-left: auto; padding: 7px 14px; }
 @media (max-width: 640px) { .prm-champ { grid-template-columns: 1fr; gap: 4px; } }
+
+/* ---------- Graphique interactif & sélecteur de périodes ---------- */
+.zone-graph {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dotted var(--trait);
+}
+.graph-periodes {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.periode-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 4px 12px;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--trait);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.periode-btn:hover {
+  color: var(--encre);
+  border-color: var(--marine);
+}
+.periode-btn.actif {
+  background: var(--marine-pale);
+  color: var(--marine);
+  border-color: var(--marine);
+  font-weight: 600;
+}
+.graph-loading {
+  padding: 24px 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+.zone-graph iframe {
+  width: 100%;
+  height: 460px;
+  border: none;
+  border-radius: 4px;
+  background: var(--iframe-bg);
+  display: block;
+}

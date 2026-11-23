@@ -17,6 +17,7 @@ from app.engine.journal import journaliser_scan
 from app.engine.graphiques import generer_graphique, PERIODES_VALIDES
 from app.api.auth_routes import require_admin, get_current_user
 from app.engine.sentiment import analyser_actualites
+from app.engine.auth import obtenir_preferences, sauvegarder_preferences
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -185,9 +186,11 @@ async def landing_page(request: Request):
     if not user:
         return RedirectResponse(url="/login", status_code=303)
     macro, recoms, regions, tops = await _contexte()
+    prefs = await asyncio.to_thread(obtenir_preferences, user["id"])
+    defaut_indice = prefs.get("dernier_indice") or (tops[0] if tops else "CAC 40")
     return templates.TemplateResponse(request=request, name="index.html", context={
         "user": user,
-        "regions": regions, "macro": contexte_macro(macro), "defaut": tops[0] if tops else "CAC 40",
+        "regions": regions, "macro": contexte_macro(macro), "defaut": defaut_indice,
         "tops": tops[:3], "secteurs": SECTEURS}, headers=SANS_CACHE)
 
 
@@ -196,6 +199,7 @@ async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str 
     user = await get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=303)
+    await asyncio.to_thread(sauvegarder_preferences, user["id"], {"dernier_indice": indice})
     _, _, regions, _ = await _contexte()
     cfg = {"indice": indice, "secteur": secteur if secteur in SECTEURS else ""}
     return templates.TemplateResponse(request=request, name="dashboard.html", context={

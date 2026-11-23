@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from app.api.auth_routes import require_admin
 from app.engine.auth import lister_utilisateurs
 from app.engine import journal
+from app.api.screener import REGIONS, obtenir_tickers_pour_indice
 from app.engine.fetcher import (vider_cache, lister_entrees_cache,
                                 supprimer_entree_cache, supprimer_cache_indice)
 
@@ -51,7 +52,7 @@ async def admin_page(request: Request, user: dict = Depends(require_admin)):
     entrees = await asyncio.to_thread(lister_entrees_cache, 200)
     return templates.TemplateResponse(request=request, name="admin.html", context={
         "user": user, "cache": cache, "journal": j, "utilisateurs": users,
-        "entrees_cache": entrees, "resultat": None})
+        "entrees_cache": entrees, "regions": REGIONS, "resultat": None})
 
 
 @router.post("/admin/vider-cache", response_class=HTMLResponse)
@@ -63,9 +64,7 @@ async def admin_vider_cache(request: Request, user: dict = Depends(require_admin
     entrees = await asyncio.to_thread(lister_entrees_cache, 200)
     return templates.TemplateResponse(request=request, name="admin.html", context={
         "user": user, "cache": cache, "journal": j, "utilisateurs": users,
-        "entrees_cache": entrees,
-        "resultat": f"Cache vidé : {supprimes} entrées supprimées."})
-
+        "entrees_cache": entrees, "regions": REGIONS, "resultat": None})
 
 # ---------------------------------------------------------------------------
 # API REST de contrôle fin du cache (Réservé à l'administrateur)
@@ -87,8 +86,9 @@ async def api_admin_supprimer_entree(ticker: str = Query(...), date: str = Query
 
 @router.delete("/api/admin/cache/index/{index_name}")
 async def api_admin_supprimer_index(index_name: str, user: dict = Depends(require_admin)):
-    """Supprime toutes les entrées associées à un indice entier."""
-    supprimes = await asyncio.to_thread(supprimer_cache_indice, index_name)
+    """Supprime toutes les entrées associées à un indice entier (tag + tickers)."""
+    tickers = obtenir_tickers_pour_indice(index_name)
+    supprimes = await asyncio.to_thread(supprimer_cache_indice, index_name, tickers)
     return {"status": "ok", "deleted": supprimes, "indice": index_name}
 
 

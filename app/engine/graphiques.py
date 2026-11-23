@@ -76,7 +76,7 @@ HAUSSE, BAISSE = "#1FA37A", "#D4455A"      # teintes lisibles sur fond clair ET 
 def _fichier(ticker_symbol, periode="1y"):
     """Nom du fichier cache incluant la période pour éviter les collisions."""
     safe_ticker = ticker_symbol.replace('/', '_')
-    return os.path.join(dossier_graphs, f"{safe_ticker}_{periode}.html")
+    return os.path.join(dossier_graphs, f"graph_{safe_ticker}_{periode}.html")
 
 
 def generer_graphique(ticker_symbol, periode="1y", validite_secondes=6 * 3600):
@@ -99,8 +99,12 @@ def generer_graphique(ticker_symbol, periode="1y", validite_secondes=6 * 3600):
             yf_period = "max"
 
         df = yf.Ticker(ticker_symbol).history(period=yf_period)
-        if df.empty:
+        if df is None or df.empty:
             return None
+        df = df.dropna(subset=["Close", "Open", "High", "Low"])
+        if df.empty or len(df) < 5:
+            return None
+
         c = df["Close"]
         df["MA50"], df["MA200"] = c.rolling(50).mean(), c.rolling(200).mean()
         ma20, sd = c.rolling(20).mean(), c.rolling(20).std()
@@ -121,9 +125,15 @@ def generer_graphique(ticker_symbol, periode="1y", validite_secondes=6 * 3600):
         fig.add_trace(go.Candlestick(x=d.index, open=d["Open"], high=d["High"], low=d["Low"], close=d["Close"],
                                      name="Cours", increasing_line_color=HAUSSE,
                                      decreasing_line_color=BAISSE), row=1, col=1)
-        for col, couleur, nom in (("MA50", "#A87510", "MM50"), ("MA200", "#0D5B7C", "MM200")):
-            fig.add_trace(go.Scatter(x=d.index, y=d[col], mode="lines", line=dict(color=couleur, width=1.4),
-                                     name=nom), row=1, col=1)
+
+        # Tracé conditionnel des moyennes mobiles si suffisamment de points
+        if len(df) >= 50 and d["MA50"].dropna().shape[0] > 0:
+            fig.add_trace(go.Scatter(x=d.index, y=d["MA50"], mode="lines",
+                                     line=dict(color="#A87510", width=1.4), name="MM50"), row=1, col=1)
+        if len(df) >= 200 and d["MA200"].dropna().shape[0] > 0:
+            fig.add_trace(go.Scatter(x=d.index, y=d["MA200"], mode="lines",
+                                     line=dict(color="#0D5B7C", width=1.4), name="MM200"), row=1, col=1)
+
         fig.add_trace(go.Scatter(x=d.index, y=d["Haut"], mode="lines", line=dict(color="rgba(86,102,118,.35)", width=1),
                                  name="Bollinger haut", showlegend=False), row=1, col=1)
         fig.add_trace(go.Scatter(x=d.index, y=d["Bas"], mode="lines", line=dict(color="rgba(86,102,118,.35)", width=1),
@@ -139,11 +149,14 @@ def generer_graphique(ticker_symbol, periode="1y", validite_secondes=6 * 3600):
         fig.add_trace(go.Scatter(x=d.index, y=signal, mode="lines", line=dict(color="#A87510", width=1.3), name="Signal"), row=4, col=1)
         fig.add_trace(go.Bar(x=d.index, y=macd - signal, name="Histogramme",
                              marker_color=[HAUSSE if v >= 0 else BAISSE for v in (macd - signal)]), row=4, col=1)
-        fig.update_layout(template="plotly_white", xaxis_rangeslider_visible=False, height=720,
+        fig.update_layout(template="plotly_white", xaxis_rangeslider_visible=False, height=720, autosize=True,
                           title=dict(text=titre_graph, font=dict(size=14)),
                           margin=dict(l=40, r=20, t=40, b=20), legend=dict(orientation="h", y=1.04),
                           font=dict(family="IBM Plex Sans, sans-serif", size=12, color="#14212C"))
-        fig.write_html(chemin, include_plotlyjs="cdn", post_script=POST_SCRIPT)
+        fig.write_html(chemin, include_plotlyjs="cdn", post_script=POST_SCRIPT,
+                       config={"responsive": True, "displayModeBar": False})
         return chemin
+    except Exception:
+        return None
     except Exception:
         return None

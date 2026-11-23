@@ -162,14 +162,24 @@ def init_cache_db():
     finally:
         conn.close()
 
-
-def charger_du_cache(ticker, date_str):
+def charger_du_cache(ticker, date_str, max_age_heures: float = 4.0):
     try:
         conn = _conn_cache()
         try:
-            row = conn.execute("SELECT data FROM cache_actions WHERE ticker=? AND date=? AND version=?",
-                               (ticker, date_str, VERSION_SCHEMA)).fetchone()
-            return json.loads(row["data"]) if row else None
+            row = conn.execute(
+                "SELECT data, last_updated FROM cache_actions WHERE ticker=? AND date=? AND version=?",
+                (ticker, date_str, VERSION_SCHEMA)
+            ).fetchone()
+            if not row:
+                return None
+            if max_age_heures and row["last_updated"]:
+                try:
+                    maj = datetime.fromisoformat(row["last_updated"].replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - maj).total_seconds() > max_age_heures * 3600.0:
+                        return None
+                except Exception:
+                    pass
+            return json.loads(row["data"])
         finally:
             conn.close()
     except Exception:
@@ -225,13 +235,19 @@ def supprimer_entree_cache(ticker: str, date_str: str = None) -> int:
     return n
 
 
-def supprimer_cache_indice(indice: str) -> int:
-    """Supprime toutes les entrées associées à un indice spécifique."""
+def supprimer_cache_indice(indice: str, tickers: list[str] = None) -> int:
+    """Supprime toutes les entrées associées à un indice spécifique (tagué par l'indice ou liste de tickers)."""
     conn = _conn_cache()
     try:
-        cur = conn.execute("DELETE FROM cache_actions WHERE indice = ?", (indice,))
+        cur1 = conn.execute("DELETE FROM cache_actions WHERE indice = ?", (indice,))
+        n = cur1.rowcount
+        if tickers:
+            clean_tickers = [t.strip().upper() for t in tickers if t]
+            if clean_tickers:
+                placeholders = ",".join("?" for _ in clean_tickers)
+                cur2 = conn.execute(f"DELETE FROM cache_actions WHERE ticker IN ({placeholders})", clean_tickers)
+                n += cur2.rowcount
         conn.commit()
-        n = cur.rowcount
     finally:
         conn.close()
     return n
@@ -350,6 +366,13 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
     try:
         t = yf.Ticker(ticker_symbol)
         info = t.info or {}
+        if not info or not info.get("shortName"):
+            time.sleep(1.5)
+            try:
+                t = yf.Ticker(ticker_symbol)
+                info = t.info or {}
+            except Exception:
+                pass
         secteur = info.get("sector") or "N/A"
         if secteurs_cibles and secteur not in secteurs_cibles:
             return None
@@ -525,5 +548,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")
-        # Au lieu d'utiliser ETAT_ERREURS ici, on renvoie un dictionnaire explicite
-        return {"erreur_ticker": ticker_symbol, "message": f"{type(e).__name__}: {e}"[:160]}
+        with _verrou:
+            ETAT_ERREURS["n"] += 1
+            ETAT_ERREURS["derniere"] = f"{ticker_symbol}: {type(e).__name__} {e}"[:160]
+        return None
