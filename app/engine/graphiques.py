@@ -63,6 +63,10 @@ POST_SCRIPT = r"""
     colorer('Bollinger haut', 'line.color', p.bande);
     colorer('Bollinger bas', 'line.color', p.bande);
     colorer('Bollinger bas', 'fillcolor', p.remplissage);
+    try {
+      var mbBtns = document.querySelectorAll('.modebar-btn path');
+      mbBtns.forEach(function (path) { path.style.fill = p.texte; });
+    } catch(e) {}
   }
   appliquer(themeInitial());
   window.addEventListener('message', function (e) {
@@ -153,10 +157,20 @@ def generer_graphique(ticker_symbol, periode="1y", validite_secondes=6 * 3600):
                           title=dict(text=titre_graph, font=dict(size=14)),
                           margin=dict(l=40, r=20, t=40, b=20), legend=dict(orientation="h", y=1.04),
                           font=dict(family="IBM Plex Sans, sans-serif", size=12, color="#14212C"))
-        fig.write_html(chemin, include_plotlyjs="cdn", post_script=POST_SCRIPT,
-                       config={"responsive": True, "displayModeBar": False})
+
+        config = {
+            "responsive": True,
+            "displayModeBar": True,
+            "scrollZoom": True,
+            "displaylogo": False,
+            "doubleClick": "reset+autosize",
+            "modeBarButtons": [
+                ["zoom2d", "pan2d"],
+                ["zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d"]
+            ]
+        }
+        fig.write_html(chemin, include_plotlyjs="cdn", post_script=POST_SCRIPT, config=config)
         return chemin
-    except Exception:
-        return None
-    except Exception:
+    except Exception as e:
+        print(f"Erreur génération graphique {ticker_symbol} : {e}")
         return None

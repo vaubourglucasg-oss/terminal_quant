@@ -346,6 +346,8 @@ $(function () {
     if (this.dataset.action === 'graph') {
       const container = zone.find('.zone-graph');
       container.find('.graph-periodes').show();
+      container.find('.periode-btn').removeClass('actif');
+      container.find('.periode-btn[data-periode="1y"]').addClass('actif');
       chargerGraphiqueIframe(container, tk, '1y');
     } else {
       const cible = zone.find('.actus').text('Chargement…');
