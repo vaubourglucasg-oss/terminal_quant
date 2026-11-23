@@ -1,15 +1,20 @@
 import os
 import secrets
 from pathlib import Path
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+
 from app.api.screener import router as api_router
 from app.api.mindmap_routes import router as mindmap_router
 from app.api.journal_routes import router as journal_router
 from app.api.auth_routes import router as auth_router
+from app.api.user_routes import router as user_router
 from app.api.admin_routes import router as admin_router
 from app.engine.auth import init_db, creer_ou_mettre_a_jour_admin
+from app.engine.scheduler import demarrer_scheduler, arreter_scheduler
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -31,10 +36,37 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_hex(32)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialisation de la base utilisateurs et synchronisation du compte admin si configuré
+    init_db()
+    if ADMIN_EMAIL and ADMIN_PASSWORD:
+        creer_ou_mettre_a_jour_admin(ADMIN_EMAIL, ADMIN_PASSWORD)
+
+    # Démarrage du planificateur de fond APScheduler
+    scheduler_actif = os.environ.get("ENABLE_SCHEDULER", "true").lower() in ("true", "1")
+    if scheduler_actif:
+        try:
+            demarrer_scheduler()
+        except Exception as e:
+            print(f"[Scheduler] Erreur au démarrage : {e}")
+
+    yield
+
+    # Arrêt propre du planificateur
+    if scheduler_actif:
+        try:
+            arreter_scheduler()
+        except Exception as e:
+            print(f"[Scheduler] Erreur à l'arrêt : {e}")
+
+
 app = FastAPI(
     title="Terminal Quantitatif SaaS",
     description="Moteur d'analyse boursière temps réel",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Gestion sécurisée des sessions (cookie HttpOnly signé)
@@ -54,15 +86,11 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Enregistrement des routes modulaires
 app.include_router(auth_router)
+app.include_router(user_router)
 app.include_router(admin_router)
 app.include_router(api_router)
 app.include_router(mindmap_router)
 app.include_router(journal_router)
-
-# Initialisation de la base utilisateurs et synchronisation du compte admin si configuré
-init_db()
-if ADMIN_EMAIL and ADMIN_PASSWORD:
-    creer_ou_mettre_a_jour_admin(ADMIN_EMAIL, ADMIN_PASSWORD)
 
 @app.middleware("http")
 async def desactiver_cache_navigateur(request: Request, call_next):

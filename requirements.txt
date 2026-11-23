@@ -12,3 +12,5 @@ passlib[bcrypt]
 itsdangerous
 python-multipart
 tzdata
+apscheduler>=3.10.0
+

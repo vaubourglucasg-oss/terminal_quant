@@ -250,7 +250,7 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
         async def travailleur(tk):
             async with sem:
                 try:
-                    return await asyncio.to_thread(analyser_action_brute, tk, secteurs_cibles, rf, macro, bench, reg["hyp"])
+                    return await asyncio.to_thread(analyser_action_brute, tk, secteurs_cibles, rf, macro, bench, reg["hyp"], indice)
                 except Exception as e:
                     print(f"{tk}: {e}")
                     return None

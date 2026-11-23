@@ -5,7 +5,7 @@ import time
 import sqlite3
 import threading
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -121,50 +121,137 @@ def json_safe(o):
 # --------------------------------------------------------------------------- #
 # Cache SQLite (JSON au lieu de pickle : lisible, sûr, versionné)
 # --------------------------------------------------------------------------- #
-def init_cache_db():
+def _conn_cache():
+    dossier = os.path.dirname(db_cache_path)
+    if dossier:
+        os.makedirs(dossier, exist_ok=True)
     conn = sqlite3.connect(db_cache_path, timeout=30)
-    conn.execute("CREATE TABLE IF NOT EXISTS cache_actions "
-                 "(ticker TEXT, date TEXT, version INTEGER, data TEXT, PRIMARY KEY (ticker, date, version))")
-    conn.execute("DELETE FROM cache_actions WHERE date <= date('now', '-7 days')")
-    conn.commit()
-    conn.close()
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_cache_db():
+    conn = _conn_cache()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cache_actions (
+                ticker TEXT,
+                date TEXT,
+                version INTEGER,
+                data TEXT,
+                last_updated TEXT,
+                indice TEXT,
+                categorie TEXT,
+                PRIMARY KEY (ticker, date, version)
+            )
+        """)
+        # Migration dynamique des colonnes si table préexistante
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(cache_actions)").fetchall()]
+        if "last_updated" not in cols:
+            conn.execute("ALTER TABLE cache_actions ADD COLUMN last_updated TEXT")
+        if "indice" not in cols:
+            conn.execute("ALTER TABLE cache_actions ADD COLUMN indice TEXT")
+        if "categorie" not in cols:
+            conn.execute("ALTER TABLE cache_actions ADD COLUMN categorie TEXT")
+
+        conn.execute("DELETE FROM cache_actions WHERE date <= date('now', '-7 days')")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def charger_du_cache(ticker, date_str):
     try:
-        conn = sqlite3.connect(db_cache_path, timeout=30)
-        row = conn.execute("SELECT data FROM cache_actions WHERE ticker=? AND date=? AND version=?",
-                           (ticker, date_str, VERSION_SCHEMA)).fetchone()
-        conn.close()
-        return json.loads(row[0]) if row else None
+        conn = _conn_cache()
+        try:
+            row = conn.execute("SELECT data FROM cache_actions WHERE ticker=? AND date=? AND version=?",
+                               (ticker, date_str, VERSION_SCHEMA)).fetchone()
+            return json.loads(row["data"]) if row else None
+        finally:
+            conn.close()
     except Exception:
         return None
+
+
+def sauvegarder_dans_cache(ticker, date_str, data, indice=None, categorie="action"):
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(data, dict):
+        data["maj"] = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        data["last_updated"] = now_iso
+    try:
+        conn = _conn_cache()
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO cache_actions (ticker, date, version, data, last_updated, indice, categorie)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (ticker, date_str, VERSION_SCHEMA, json.dumps(data), now_iso, indice, categorie))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Cache non écrit pour {ticker} : {e}")
+
+
+def lister_entrees_cache(limite: int = 500) -> list[dict]:
+    """Liste les entrées en cache avec leur fraîcheur, indice et taille."""
+    conn = _conn_cache()
+    try:
+        rows = conn.execute("""
+            SELECT ticker, date, version, last_updated, indice, categorie, LENGTH(data) as taille_octets
+            FROM cache_actions
+            ORDER BY date DESC, last_updated DESC
+            LIMIT ?
+        """, (limite,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def supprimer_entree_cache(ticker: str, date_str: str = None) -> int:
+    """Supprime une entrée spécifique du cache par ticker et optionnellement date."""
+    conn = _conn_cache()
+    try:
+        if date_str:
+            cur = conn.execute("DELETE FROM cache_actions WHERE ticker = ? AND date = ?", (ticker, date_str))
+        else:
+            cur = conn.execute("DELETE FROM cache_actions WHERE ticker = ?", (ticker,))
+        conn.commit()
+        n = cur.rowcount
+    finally:
+        conn.close()
+    return n
+
+
+def supprimer_cache_indice(indice: str) -> int:
+    """Supprime toutes les entrées associées à un indice spécifique."""
+    conn = _conn_cache()
+    try:
+        cur = conn.execute("DELETE FROM cache_actions WHERE indice = ?", (indice,))
+        conn.commit()
+        n = cur.rowcount
+    finally:
+        conn.close()
+    return n
 
 
 def vider_cache():
     """Vide le cache des analyses et la mémoire à durée de vie (macro, taux, change). Retourne le nombre de lignes."""
     n = 0
     try:
-        conn = sqlite3.connect(db_cache_path, timeout=30)
-        n = conn.execute("DELETE FROM cache_actions").rowcount
-        conn.commit()
-        conn.close()
+        conn = _conn_cache()
+        try:
+            n = conn.execute("DELETE FROM cache_actions").rowcount
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         print(f"Cache non vidé : {e}")
     with _verrou:
         _ttl.clear()
     return n
-
-
-def sauvegarder_dans_cache(ticker, date_str, data):
-    try:
-        conn = sqlite3.connect(db_cache_path, timeout=30)
-        conn.execute("INSERT OR REPLACE INTO cache_actions VALUES (?, ?, ?, ?)",
-                     (ticker, date_str, VERSION_SCHEMA, json.dumps(data)))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Cache non écrit pour {ticker} : {e}")
 
 
 init_cache_db()
@@ -250,7 +337,7 @@ def etiquette_macro(industrie, macro):
 # --------------------------------------------------------------------------- #
 # Analyse d'une action : métriques BRUTES uniquement (le scoring relatif est fait ensuite, sur l'ensemble)
 # --------------------------------------------------------------------------- #
-def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None):
+def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None, indice=None):
     today = datetime.today().strftime("%Y-%m-%d")
     hyp = hyp or normaliser_hypotheses(None)
     cle_cache = ticker_symbol + cle_hypotheses(hyp)      # des hypothèses différentes = des résultats différents
@@ -404,7 +491,9 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             "ticker": ticker_symbol, "nom": info.get("shortName") or ticker_symbol, "secteur": secteur,
             "industrie": info.get("industry") or "", "est_fin": est_fin, "devise": devise, "prix": prix,
             "resume": (info.get("longBusinessSummary") or "Aucune description.")[:700],
-            "url": f"https://finance.yahoo.com/quote/{ticker_symbol}/profile", "maj": datetime.today().strftime("%d/%m/%Y"),
+            "url": f"https://finance.yahoo.com/quote/{ticker_symbol}/profile",
+            "maj": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC"),
+            "indice": indice,
             # valorisation
             "per": per, "ev_ebitda": ev_ebitda, "ebitda_yield": ebitda_yield, "fcf_yield": fcf_yield,
             "earn_yield": earn_yield, "div_yield": div_yield,
@@ -432,7 +521,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             "macro": etiquette_macro(info.get("industry"), donnees_macro or {}), "alertes": alertes,
         }
         row = json_safe(row)
-        sauvegarder_dans_cache(cle_cache, today, row)
+        sauvegarder_dans_cache(cle_cache, today, row, indice=indice)
         return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")

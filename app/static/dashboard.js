@@ -6,6 +6,24 @@ $(function () {
   let favoris = {};
   try { favoris = JSON.parse(localStorage.getItem('quant_favoris') || '{}'); } catch (e) { favoris = {}; }
 
+  // Synchronisation des favoris avec la base SQLite
+  fetch('/api/user/favorites')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (d && Array.isArray(d.favorites)) {
+        favoris = {};
+        d.favorites.forEach(tk => { favoris[tk] = true; });
+        try { localStorage.setItem('quant_favoris', JSON.stringify(favoris)); } catch (e) {}
+        $('.etoile').each(function () {
+          const tk = this.dataset.ticker;
+          $(this).toggleClass('actif', !!favoris[tk]);
+        });
+        if (typeof table !== 'undefined' && table.draw) {
+          table.draw(false);
+        }
+      }
+    }).catch(() => {});
+
   const donnees = {};
   const lignes = {};
   let total = 0, termine = false;
@@ -159,9 +177,19 @@ $(function () {
   // ---------- favoris ----------
   function basculerFavori(el) {
     const tk = el.dataset.ticker;
-    if (favoris[tk]) delete favoris[tk]; else favoris[tk] = true;
+    const estActif = !favoris[tk];
+    if (estActif) favoris[tk] = true; else delete favoris[tk];
     try { localStorage.setItem('quant_favoris', JSON.stringify(favoris)); } catch (e) { }
-    $(el).toggleClass('actif', !!favoris[tk]);
+    $(el).toggleClass('actif', estActif);
+    if (typeof table !== 'undefined' && table.draw) {
+      table.draw(false);
+    }
+    // Persistance SQLite
+    fetch('/api/user/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: tk, action: estActif ? 'add' : 'remove' })
+    }).catch(function (err) { console.error('Erreur sauvegarde favori:', err); });
   }
   $('#tbl tbody').on('click', '.etoile', function (e) { e.stopPropagation(); basculerFavori(this); });
   $('#tbl tbody').on('keydown', '.etoile', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); basculerFavori(this); } });

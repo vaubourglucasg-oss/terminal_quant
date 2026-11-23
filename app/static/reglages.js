@@ -40,8 +40,34 @@
   function lire() {
     try { return fusion(copie(DEFAUT), JSON.parse(localStorage.getItem(CLE) || '{}')); } catch (e) { return copie(DEFAUT); }
   }
-  function sauver() { try { localStorage.setItem(CLE, JSON.stringify(courant)); } catch (e) { /* stockage indisponible */ } }
+  function sauver() {
+    try { localStorage.setItem(CLE, JSON.stringify(courant)); } catch (e) { /* stockage indisponible */ }
+    if (typeof fetch === 'function') {
+      try {
+        fetch('/api/user/preferences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(courant)
+        }).catch(function () {});
+      } catch (e) {}
+    }
+  }
   courant = lire();
+
+  // Synchronisation SQLite des préférences utilisateur dès le chargement
+  if (typeof fetch === 'function') {
+    fetch('/api/user/preferences')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && d.preferences && typeof d.preferences === 'object' && Object.keys(d.preferences).length > 0) {
+          courant = fusion(copie(DEFAUT), d.preferences);
+          try { localStorage.setItem(CLE, JSON.stringify(courant)); } catch (e) {}
+          appliquerVisuel();
+          ecouteurs.forEach(function (f) { f('*'); });
+        }
+      })
+      .catch(function () {});
+  }
 
   appliquerVisuel();
 

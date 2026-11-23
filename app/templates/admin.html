@@ -48,19 +48,73 @@
     {% endif %}
 
     <!-- Cache -->
-    <h2>Cache des analyses</h2>
+    <h2>Cache global des analyses</h2>
     <div class="admin-card">
         <dl>
-            <div><dt>Fichier</dt><dd>{{ cache.fichier }}</dd></div>
-            <div><dt>Taille</dt><dd>{{ cache.taille_mo }} Mo</dd></div>
+            <div><dt>Fichier SQLite partagé</dt><dd>{{ cache.fichier }}</dd></div>
+            <div><dt>Taille sur disque</dt><dd id="cache-taille">{{ cache.taille_mo }} Mo</dd></div>
             {% for nom, nb in cache.tables.items() %}
-            <div><dt>Table {{ nom }}</dt><dd>{{ nb }} entrees</dd></div>
+            <div><dt>Table {{ nom }}</dt><dd id="cache-count-{{ nom }}">{{ nb }} entrées</dd></div>
             {% endfor %}
         </dl>
-        <div class="admin-actions">
-            <form method="POST" action="/admin/vider-cache" onsubmit="return confirm('Vider tout le cache des analyses ?');">
-                <button type="submit" class="btn-danger">Vider le cache</button>
-            </form>
+        
+        <div style="margin-top: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; border-top: 1px solid var(--trait); padding-top: 14px;">
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <label for="select-purge-indice" style="font-size: .85rem; color: var(--muted);">Purger par indice :</label>
+                <select id="select-purge-indice" style="background: var(--fond); color: var(--encre); border: 1px solid var(--trait); padding: 5px 8px; border-radius: 4px; font-size: .85rem;">
+                    <option value="CAC 40">CAC 40</option>
+                    <option value="S&P 500">S&P 500</option>
+                    <option value="NASDAQ 100">NASDAQ 100</option>
+                    <option value="CSI 300">CSI 300</option>
+                    <option value="DAX 40">DAX 40</option>
+                    <option value="Euro Stoxx 50">Euro Stoxx 50</option>
+                    <option value="FTSE 100">FTSE 100</option>
+                    <option value="Nikkei 225">Nikkei 225</option>
+                </select>
+                <button type="button" id="btn-purger-indice" class="theme-btn" style="font-size: .82rem;">Purger l'indice</button>
+            </div>
+
+            <button type="button" id="btn-vider-tout-ajax" class="btn-danger" style="margin-left: auto;">Vider tout le cache</button>
+        </div>
+
+        <div style="margin-top: 16px; border-top: 1px dotted var(--trait); padding-top: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <h3 style="font-size: .9rem; margin: 0; color: var(--encre);">Entrées en cache (<span id="nb-entrees-affichees">{{ entrees_cache|length }}</span>)</h3>
+                <input type="text" id="filtre-cache" placeholder="Filtrer par ticker ou indice..." style="background: var(--fond); color: var(--encre); border: 1px solid var(--trait); padding: 4px 10px; border-radius: 4px; font-size: .82rem; width: 220px;">
+            </div>
+
+            <div style="max-height: 380px; overflow-y: auto; border: 1px solid var(--trait); border-radius: 4px;">
+                <table id="tbl-cache" style="margin: 0;">
+                    <thead style="position: sticky; top: 0; background: var(--surface);">
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Indice</th>
+                            <th>Date séance</th>
+                            <th>Dernière màj (UTC)</th>
+                            <th>Taille</th>
+                            <th style="text-align: right;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-cache">
+                    {% for e in entrees_cache %}
+                    <tr id="row-cache-{{ loop.index }}" data-ticker="{{ e.ticker }}" data-date="{{ e.date }}" data-indice="{{ e.indice or '' }}">
+                        <td><strong>{{ e.ticker }}</strong></td>
+                        <td><span style="color: var(--marine);">{{ e.indice or '–' }}</span></td>
+                        <td>{{ e.date }}</td>
+                        <td style="font-family: monospace; font-size: .82rem;">{{ e.last_updated or '–' }}</td>
+                        <td>{{ (e.taille_octets / 1024)|round(1) }} ko</td>
+                        <td style="text-align: right;">
+                            <button type="button" class="btn-suppr-ligne" data-ticker="{{ e.ticker }}" data-date="{{ e.date }}" style="background: none; border: 1px solid var(--trait); color: var(--rouge); padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: .78rem;" title="Supprimer du cache">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr id="row-cache-vide"><td colspan="6" style="text-align: center; color: var(--muted); padding: 20px;">Aucune entrée dans le cache.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -108,5 +162,120 @@
         </table>
     </div>
 </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const tbody = document.getElementById("tbody-cache");
+    const countAffiche = document.getElementById("nb-entrees-affichees");
+    const filtre = document.getElementById("filtre-cache");
+
+    // Filtrage dynamique des lignes
+    if (filtre) {
+        filtre.addEventListener("input", function () {
+            const q = this.value.trim().toLowerCase();
+            const rows = tbody.querySelectorAll("tr[data-ticker]");
+            let vis = 0;
+            rows.forEach(r => {
+                const tk = (r.getAttribute("data-ticker") || "").toLowerCase();
+                const ind = (r.getAttribute("data-indice") || "").toLowerCase();
+                const match = !q || tk.includes(q) || ind.includes(q);
+                r.style.display = match ? "" : "none";
+                if (match) vis++;
+            });
+            if (countAffiche) countAffiche.textContent = vis;
+        });
+    }
+
+    // Suppression d'une entrée unique sans rechargement
+    tbody.addEventListener("click", async function (e) {
+        const btn = e.target.closest(".btn-suppr-ligne");
+        if (!btn) return;
+        const ticker = btn.getAttribute("data-ticker");
+        const date = btn.getAttribute("data-date");
+        if (!confirm(`Supprimer l'entrée en cache pour ${ticker} (${date}) ?`)) return;
+
+        btn.disabled = true;
+        try {
+            const url = `/api/admin/cache/entry?ticker=${encodeURIComponent(ticker)}${date ? '&date=' + encodeURIComponent(date) : ''}`;
+            const res = await fetch(url, { method: "DELETE" });
+            const data = await res.json();
+            if (data.status === "ok") {
+                const tr = btn.closest("tr");
+                tr.style.transition = "opacity 0.3s ease";
+                tr.style.opacity = "0";
+                setTimeout(() => {
+                    tr.remove();
+                    const restants = tbody.querySelectorAll("tr[data-ticker]").length;
+                    if (countAffiche) countAffiche.textContent = restants;
+                    if (restants === 0) {
+                        tbody.innerHTML = '<tr id="row-cache-vide"><td colspan="6" style="text-align: center; color: var(--muted); padding: 20px;">Aucune entrée dans le cache.</td></tr>';
+                    }
+                }, 300);
+            } else {
+                alert("Erreur lors de la suppression : " + (data.detail || "Échec"));
+                btn.disabled = false;
+            }
+        } catch (err) {
+            alert("Erreur réseau : " + err.message);
+            btn.disabled = false;
+        }
+    });
+
+    // Purger un indice entier
+    const btnPurgeIndice = document.getElementById("btn-purger-indice");
+    if (btnPurgeIndice) {
+        btnPurgeIndice.addEventListener("click", async function () {
+            const sel = document.getElementById("select-purge-indice");
+            const indice = sel.value;
+            if (!confirm(`Supprimer tout le cache pour l'indice ${indice} ?`)) return;
+            btnPurgeIndice.disabled = true;
+            try {
+                const res = await fetch(`/api/admin/cache/index/${encodeURIComponent(indice)}`, { method: "DELETE" });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    // Supprimer du DOM les lignes correspondantes
+                    const rows = tbody.querySelectorAll(`tr[data-indice="${indice}"]`);
+                    rows.forEach(r => r.remove());
+                    const restants = tbody.querySelectorAll("tr[data-ticker]").length;
+                    if (countAffiche) countAffiche.textContent = restants;
+                    alert(`Purge terminée : ${data.deleted} entrée(s) supprimée(s) pour ${indice}.`);
+                } else {
+                    alert("Erreur : " + (data.detail || "Échec"));
+                }
+            } catch (err) {
+                alert("Erreur réseau : " + err.message);
+            } finally {
+                btnPurgeIndice.disabled = false;
+            }
+        });
+    }
+
+    // Vider tout le cache en AJAX
+    const btnViderTout = document.getElementById("btn-vider-tout-ajax");
+    if (btnViderTout) {
+        btnViderTout.addEventListener("click", async function () {
+            if (!confirm("Vider l'intégralité du cache des analyses et indicateurs macro ?")) return;
+            btnViderTout.disabled = true;
+            try {
+                const res = await fetch("/api/admin/cache/all", { method: "DELETE" });
+                const data = await res.json();
+                if (data.status === "ok") {
+                    tbody.innerHTML = '<tr id="row-cache-vide"><td colspan="6" style="text-align: center; color: var(--muted); padding: 20px;">Aucune entrée dans le cache.</td></tr>';
+                    if (countAffiche) countAffiche.textContent = "0";
+                    const tElem = document.getElementById("cache-taille");
+                    if (tElem) tElem.textContent = "0.0 Mo";
+                    alert(`Cache entièrement vidé : ${data.deleted} entrées supprimées.`);
+                } else {
+                    alert("Erreur : " + (data.detail || "Échec"));
+                }
+            } catch (err) {
+                alert("Erreur réseau : " + err.message);
+            } finally {
+                btnViderTout.disabled = false;
+            }
+        });
+    }
+});
+</script>
 </body>
 </html>

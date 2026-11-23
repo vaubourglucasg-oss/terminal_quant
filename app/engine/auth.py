@@ -7,6 +7,7 @@ Ce module fournit :
   - get_current_user  : dépendance FastAPI (extrait l'utilisateur de la session)
   - require_admin     : dépendance FastAPI (403 si pas admin)
 """
+import json
 import os
 import sqlite3
 import threading
@@ -43,6 +44,21 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'user',
     cree_le TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id INTEGER PRIMARY KEY,
+    preferences_json TEXT NOT NULL,
+    mis_a_jour_le TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_favorites (
+    user_id INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    ajoute_le TEXT NOT NULL,
+    PRIMARY KEY (user_id, ticker),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 """
 
 
@@ -54,6 +70,8 @@ def _conn():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -159,3 +177,105 @@ def get_user_by_id(user_id: int) -> dict | None:
         finally:
             conn.close()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Préférences et Watchlist (Favoris) liés au compte utilisateur
+# ---------------------------------------------------------------------------
+def obtenir_preferences(user_id: int) -> dict:
+    """Récupère les préférences de l'utilisateur ou un dictionnaire vide si aucune."""
+    with _verrou:
+        conn = _conn()
+        try:
+            row = conn.execute("SELECT preferences_json FROM user_preferences WHERE user_id = ?", (user_id,)).fetchone()
+            if row and row["preferences_json"]:
+                return json.loads(row["preferences_json"])
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    return {}
+
+
+def sauvegarder_preferences(user_id: int, prefs: dict) -> dict:
+    """Enregistre ou met à jour les préférences de l'utilisateur."""
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    texte = json.dumps(prefs)
+    with _verrou:
+        conn = _conn()
+        try:
+            conn.execute("""
+                INSERT INTO user_preferences (user_id, preferences_json, mis_a_jour_le)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    preferences_json = excluded.preferences_json,
+                    mis_a_jour_le = excluded.mis_a_jour_le
+            """, (user_id, texte, now_iso))
+            conn.commit()
+        finally:
+            conn.close()
+    return prefs
+
+
+def obtenir_favoris(user_id: int) -> list[str]:
+    """Liste les tickers favoris de l'utilisateur."""
+    with _verrou:
+        conn = _conn()
+        try:
+            rows = conn.execute("SELECT ticker FROM user_favorites WHERE user_id = ? ORDER BY ajoute_le ASC",
+                                (user_id,)).fetchall()
+            return [r["ticker"] for r in rows]
+        finally:
+            conn.close()
+
+
+def ajouter_favori(user_id: int, ticker: str) -> bool:
+    """Ajoute un ticker aux favoris de l'utilisateur."""
+    tk = ticker.strip().upper()
+    if not tk:
+        return False
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _verrou:
+        conn = _conn()
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO user_favorites (user_id, ticker, ajoute_le)
+                VALUES (?, ?, ?)
+            """, (user_id, tk, now_iso))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+
+def supprimer_favori(user_id: int, ticker: str) -> bool:
+    """Retire un ticker des favoris de l'utilisateur."""
+    tk = ticker.strip().upper()
+    if not tk:
+        return False
+    with _verrou:
+        conn = _conn()
+        try:
+            conn.execute("DELETE FROM user_favorites WHERE user_id = ? AND ticker = ?", (user_id, tk))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+
+def definir_favoris(user_id: int, tickers: list[str]) -> list[str]:
+    """Remplace complètement la liste des favoris de l'utilisateur."""
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    propres = list(dict.fromkeys([t.strip().upper() for t in tickers if t and t.strip()]))
+    with _verrou:
+        conn = _conn()
+        try:
+            conn.execute("DELETE FROM user_favorites WHERE user_id = ?", (user_id,))
+            for tk in propres:
+                conn.execute("INSERT INTO user_favorites (user_id, ticker, ajoute_le) VALUES (?, ?, ?)",
+                             (user_id, tk, now_iso))
+            conn.commit()
+            return propres
+        finally:
+            conn.close()
+
