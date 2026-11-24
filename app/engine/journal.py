@@ -37,7 +37,9 @@ from app.engine.scoring import calculer_scores, normaliser_reglages
 
 _dossier = os.path.dirname(os.path.abspath(__file__))
 racine = os.path.dirname(os.path.dirname(_dossier))
-db_journal_path = os.environ.get("JOURNAL_DB") or os.path.join(racine, "journal_signaux.db")
+DATA_DIR = os.environ.get("DATA_DIR") or racine
+os.makedirs(DATA_DIR, exist_ok=True)
+db_journal_path = os.environ.get("JOURNAL_DB") or os.path.join(DATA_DIR, "journal_signaux.db")
 
 SEUIL_COMPLET = 0.8          # part minimale des titres demandés qui doivent avoir été analysés
 MIN_TITRES = 10
@@ -81,7 +83,8 @@ def _connexion():
     if dossier:
         os.makedirs(dossier, exist_ok=True)
     conn = sqlite3.connect(db_journal_path, timeout=30, isolation_level=None)   # transactions gérées à la main
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA journal_mode=DELETE")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_DDL)
     return conn
 

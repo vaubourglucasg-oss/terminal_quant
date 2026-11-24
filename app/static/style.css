@@ -328,7 +328,7 @@ html.light-mode.daltonien { --vert: #0B6FBF; --vert-pale: #DCEBF8; --rouge: #B85
 }
 .zone-graph iframe {
   width: 100%;
-  height: 745px;
+  height: 460px;
   border: none;
   border-radius: 4px;
   background: var(--iframe-bg);

@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 import bcrypt
 
 racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DB_PATH = os.environ.get("USERS_DB") or os.path.join(racine, "users.db")
+DATA_DIR = os.environ.get("DATA_DIR") or racine
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.environ.get("USERS_DB") or os.path.join(DATA_DIR, "users.db")
 
 
 def hacher_mot_de_passe(mot_de_passe: str) -> str:
@@ -68,7 +70,7 @@ def _conn():
         os.makedirs(dossier, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA journal_mode=DELETE")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")

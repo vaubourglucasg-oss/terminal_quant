@@ -1,8 +1,10 @@
 """Espace administrateur : statistiques du cache, journal, utilisateurs, purge du cache.
 
-Toutes les routes exigent le role admin via Depends(require_admin).
+Toutes les routes d'administration exigent le role admin via Depends(require_admin).
+L'endpoint POST /api/cron/refresh est dédié à Cloud Scheduler et sécurisé par X-Cron-Secret.
 """
 import asyncio
+import hmac
 import os
 import sqlite3
 from pathlib import Path
@@ -17,6 +19,8 @@ from app.engine import journal
 from app.api.screener import REGIONS, obtenir_tickers_pour_indice
 from app.engine.fetcher import (vider_cache, lister_entrees_cache,
                                 supprimer_entree_cache, supprimer_cache_indice)
+from app.engine.scheduler import (job_mise_a_jour_4h, _executer_cycle_complet,
+                                  est_marche_ouvert_ou_recente_cloture)
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -97,4 +101,32 @@ async def api_admin_vider_tout_cache(user: dict = Depends(require_admin)):
     """Vide l'intégralité du cache boursier et la mémoire TTL."""
     supprimes = await asyncio.to_thread(vider_cache)
     return {"status": "ok", "deleted": supprimes}
+
+
+# ---------------------------------------------------------------------------
+# Point d'entrée de réveil automatique (Cloud Scheduler)
+# ---------------------------------------------------------------------------
+@router.post("/api/cron/refresh")
+async def api_cron_refresh(request: Request):
+    """Point d'entrée sécurisé pour Google Cloud Scheduler (réveil automatique toutes les 4 heures).
+    
+    Exécute la mise à jour complète de manière synchrone pendant la requête HTTP,
+    ce qui garantit que Cloud Run (avec min-instances=0) maintient le CPU actif
+    jusqu'à la fin de la tâche.
+    """
+    secret_attendu = os.environ.get("CRON_SECRET", "").strip()
+    secret_fourni = request.headers.get("X-Cron-Secret", "").strip()
+
+    if not secret_attendu or not hmac.compare_digest(secret_fourni, secret_attendu):
+        raise HTTPException(status_code=403, detail="Secret cron invalide")
+
+    ouvert, msg_marche = est_marche_ouvert_ou_recente_cloture()
+    # Exécution synchrone dans un thread pour tenir le cycle pendant l'appel HTTP Cloud Run
+    await asyncio.to_thread(job_mise_a_jour_4h)
+    await asyncio.to_thread(_executer_cycle_complet, 3.5)
+    return {
+        "status": "ok",
+        "message": "Mise à jour complète terminée",
+        "marche": msg_marche
+    }
 

@@ -50,7 +50,7 @@ PLAGES_MARCHES = {
 
 # Liste ordonnée des 20 indices depuis REGIONS
 TOUS_LES_INDICES = [nom for groupe in REGIONS.values() for nom in groupe]
-DELAI_ENTRE_INDICES_MIN = 6
+DELAI_ENTRE_INDICES_MIN = 1
 
 _scheduler = None
 _thread_staggered = None
@@ -202,23 +202,6 @@ def _executer_cycle_complet(max_age_check: float = 3.5):
     logger.info("[Scheduler] Cycle complet sur les 20 indices achevé avec succès.")
 
 
-def job_prechargement_initial():
-    """Pré-chargement initial automatique 30 secondes après le démarrage du serveur."""
-    if not acquerir_verrou("job_precharge_init", duree_secondes=7200):
-        logger.info("[Pré-chargement] Verrou déjà détenu par un autre worker.")
-        return
-
-    def runner():
-        try:
-            logger.info("[Pré-chargement] Lancement du pré-chargement initial des indices...")
-            _executer_cycle_complet(max_age_check=3.5)
-        finally:
-            liberer_verrou("job_precharge_init")
-
-    t = threading.Thread(target=runner, daemon=True, name="precharge-initial-worker")
-    t.start()
-
-
 def job_mise_a_jour_4h():
     """Tâche exécutée toutes les 4 heures : actualise la macro, les benchmarks et les actions expirées (> 4h)."""
     ouvert, msg = est_marche_ouvert_ou_recente_cloture()
@@ -319,16 +302,7 @@ def demarrer_scheduler() -> BackgroundScheduler:
     _stop_event.clear()
     _scheduler = BackgroundScheduler(timezone=PARIS_TZ)
 
-    # 1. Pré-chargement initial automatique 30 secondes après démarrage
-    date_depart = datetime.now(PARIS_TZ) + timedelta(seconds=30)
-    _scheduler.add_job(
-        job_prechargement_initial,
-        trigger=DateTrigger(run_date=date_depart, timezone=PARIS_TZ),
-        id="job_prechargement_initial",
-        replace_existing=True
-    )
-
-    # 2. Mise à jour toutes les 4 heures
+    # 1. Mise à jour toutes les 4 heures
     _scheduler.add_job(
         job_mise_a_jour_4h,
         trigger=IntervalTrigger(hours=4, timezone=PARIS_TZ),
@@ -337,7 +311,7 @@ def demarrer_scheduler() -> BackgroundScheduler:
         max_instances=1
     )
 
-    # 3. Chargement décalé (Staggered) toutes les 5 heures
+    # 2. Chargement décalé (Staggered) toutes les 5 heures
     _scheduler.add_job(
         job_staggered_indices,
         trigger=IntervalTrigger(hours=5, timezone=PARIS_TZ),
@@ -347,7 +321,7 @@ def demarrer_scheduler() -> BackgroundScheduler:
     )
 
     _scheduler.start()
-    logger.info("Planificateur APScheduler démarré (Pré-chargement 30s, Rafraîchissement 4h, Staggered 5h).")
+    logger.info("Planificateur APScheduler démarré (Rafraîchissement 4h, Staggered 5h).")
     return _scheduler
 
 
