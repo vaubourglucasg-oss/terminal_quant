@@ -18,12 +18,12 @@ from app.engine import math_models as mm
 racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.environ.get("DATA_DIR", "").strip() or racine
 db_cache_path = os.path.join(DATA_DIR, "cache_bourse_v3.db")
-VERSION_SCHEMA = 3          # à incrémenter quand la structure des lignes change : invalide le cache
+VERSION_SCHEMA = 3
 
 # --------------------------------------------------------------------------- #
-# Hypothèses de valorisation (à réviser régulièrement)
+# Hypothèses de valorisation
 # --------------------------------------------------------------------------- #
-PRIMES_RISQUE_PAYS = {      # prime ajoutée au coût des fonds propres ; défaut 2 % si pays inconnu
+PRIMES_RISQUE_PAYS = {
     "United States": 0.00, "Switzerland": 0.00, "Germany": 0.00,
     "France": 0.004, "United Kingdom": 0.005, "Japan": 0.005, "China": 0.012, "India": 0.021,
 }
@@ -31,7 +31,6 @@ HYP_DEFAUT = {"erp": 0.055, "g_term": 0.025, "rf": None, "ecart_g": 0.03, "ecart
 
 
 def normaliser_hypotheses(brut=None):
-    """Hypothèses saisies dans l'interface (en %), converties en fractions et bornées."""
     brut = brut if isinstance(brut, dict) else {}
 
     def pct(cle, lo, hi):
@@ -44,14 +43,18 @@ def normaliser_hypotheses(brut=None):
 
 
 def cle_hypotheses(hyp):
-    """Vide pour les hypothèses par défaut (les caches existants restent valides), sinon une empreinte courte."""
     arrondi = lambda h: {k: (None if v is None else round(v, 6)) for k, v in h.items()}
     if arrondi(hyp) == arrondi(normaliser_hypotheses(None)):
         return ""
     return "|" + hashlib.md5(json.dumps(arrondi(hyp), sort_keys=True).encode()).hexdigest()[:8]
 
 
-RF_LOCAL = {}
+# Taux souverains 10 ans par devise (USD utilise ^TNX en temps réel via rf_us)
+RF_LOCAL = {
+    "EUR": 0.028, "GBP": 0.043, "CHF": 0.005, "JPY": 0.010,
+    "CAD": 0.032, "AUD": 0.043, "SEK": 0.022, "HKD": 0.038,
+    "CNY": 0.021, "INR": 0.068, "BRL": 0.125, "ILS": 0.045, "ZAR": 0.105,
+}
 
 BENCHMARKS = {
     "SP 500": "^GSPC", "S&P 500": "^GSPC", "NASDAQ 100": "^NDX", "Dow Jones": "^DJI", "TSX 60": "^GSPTSE",
@@ -122,7 +125,7 @@ def json_safe(o):
 
 
 # --------------------------------------------------------------------------- #
-# Cache SQLite (compatible disque local et montage Cloud Storage FUSE)
+# Cache SQLite (table active + table staging + métadonnées)
 # --------------------------------------------------------------------------- #
 def _conn_cache():
     dossier = os.path.dirname(db_cache_path)
@@ -140,37 +143,74 @@ def _conn_cache():
 def init_cache_db():
     conn = _conn_cache()
     try:
+        for table in ("cache_actions", "cache_actions_staging"):
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    ticker TEXT,
+                    date TEXT,
+                    version INTEGER,
+                    data TEXT,
+                    last_updated TEXT,
+                    indice TEXT,
+                    categorie TEXT,
+                    PRIMARY KEY (ticker, date, version)
+                )
+            """)
+            cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            if "last_updated" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN last_updated TEXT")
+            if "indice" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN indice TEXT")
+            if "categorie" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN categorie TEXT")
+
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS cache_actions (
-                ticker TEXT,
-                date TEXT,
-                version INTEGER,
-                data TEXT,
-                last_updated TEXT,
-                indice TEXT,
-                categorie TEXT,
-                PRIMARY KEY (ticker, date, version)
+            CREATE TABLE IF NOT EXISTS cache_meta (
+                cle TEXT PRIMARY KEY,
+                valeur TEXT,
+                last_updated TEXT
             )
         """)
-        cols = [r["name"] for r in conn.execute("PRAGMA table_info(cache_actions)").fetchall()]
-        if "last_updated" not in cols:
-            conn.execute("ALTER TABLE cache_actions ADD COLUMN last_updated TEXT")
-        if "indice" not in cols:
-            conn.execute("ALTER TABLE cache_actions ADD COLUMN indice TEXT")
-        if "categorie" not in cols:
-            conn.execute("ALTER TABLE cache_actions ADD COLUMN categorie TEXT")
-
-        conn.execute("DELETE FROM cache_actions WHERE date <= date('now', '-7 days')")
+        conn.execute("DELETE FROM cache_actions WHERE date <= date('now', '-30 days')")
         conn.commit()
     finally:
         conn.close()
 
 
-def charger_du_cache(ticker, date_str, max_age_heures: float = 4.0, autoriser_perime: bool = False):
+def lire_meta(cle: str, defaut=None):
     try:
         conn = _conn_cache()
         try:
-            if autoriser_perime:
+            row = conn.execute("SELECT valeur FROM cache_meta WHERE cle = ?", (cle,)).fetchone()
+            return json.loads(row["valeur"]) if row else defaut
+        finally:
+            conn.close()
+    except Exception:
+        return defaut
+
+
+def ecrire_meta(cle: str, valeur):
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        conn = _conn_cache()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO cache_meta (cle, valeur, last_updated) VALUES (?, ?, ?)",
+                (cle, json.dumps(json_safe(valeur)), now_iso)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Erreur écriture meta {cle} : {e}")
+
+
+def charger_du_cache(ticker, date_str=None, max_age_heures: float = 4.0, autoriser_perime: bool = True):
+    """Lit uniquement depuis la table principale cache_actions."""
+    try:
+        conn = _conn_cache()
+        try:
+            if autoriser_perime or not date_str:
                 row = conn.execute(
                     "SELECT data, last_updated FROM cache_actions WHERE ticker=? AND version=? ORDER BY date DESC, last_updated DESC LIMIT 1",
                     (ticker, VERSION_SCHEMA)
@@ -196,23 +236,115 @@ def charger_du_cache(ticker, date_str, max_age_heures: float = 4.0, autoriser_pe
         return None
 
 
-def sauvegarder_dans_cache(ticker, date_str, data, indice=None, categorie="action"):
+def charger_lot_du_cache(tickers: list[str]) -> dict[str, dict]:
+    """Charge en une seule requête SQLite la dernière version valide de chaque ticker pour les utilisateurs."""
+    clean = list({t.strip() for t in tickers if t})
+    if not clean:
+        return {}
+    resultat = {}
+    conn = _conn_cache()
+    try:
+        for i in range(0, len(clean), 250):
+            lot = clean[i:i + 250]
+            ph = ",".join("?" for _ in lot)
+            rows = conn.execute(f"""
+                SELECT ticker, data
+                FROM cache_actions
+                WHERE version = ? AND ticker IN ({ph})
+                ORDER BY date ASC, last_updated ASC
+            """, [VERSION_SCHEMA, *lot]).fetchall()
+            for r in rows:
+                try:
+                    resultat[r["ticker"]] = json.loads(r["data"])
+                except Exception:
+                    pass
+    finally:
+        conn.close()
+    return resultat
+
+
+def sauvegarder_dans_cache(ticker, date_str, data, indice=None, categorie="action", table="cache_actions"):
+    if table not in ("cache_actions", "cache_actions_staging"):
+        table = "cache_actions"
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(data, dict):
-        data["maj"] = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        data["maj"] = datetime.now(timezone.utc).strftime("%d/%m %H:%M UTC")
         data["last_updated"] = now_iso
     try:
         conn = _conn_cache()
         try:
-            conn.execute("""
-                INSERT OR REPLACE INTO cache_actions (ticker, date, version, data, last_updated, indice, categorie)
+            conn.execute(f"""
+                INSERT OR REPLACE INTO {table} (ticker, date, version, data, last_updated, indice, categorie)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (ticker, date_str, VERSION_SCHEMA, json.dumps(json_safe(data)), now_iso, indice, categorie))
             conn.commit()
         finally:
             conn.close()
     except Exception as e:
-        print(f"Cache non écrit pour {ticker} : {e}")
+        print(f"Cache ({table}) non écrit pour {ticker} : {e}")
+
+
+def vider_staging(indices_cibles: list[str] | None = None):
+    conn = _conn_cache()
+    try:
+        if indices_cibles:
+            ph = ",".join("?" for _ in indices_cibles)
+            conn.execute(f"DELETE FROM cache_actions_staging WHERE indice IN ({ph})", indices_cibles)
+        else:
+            conn.execute("DELETE FROM cache_actions_staging")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def valider_staging_vers_cache(indices_cibles: list[str] | None = None) -> int:
+    """Bascule atomiquement les données prêtes de cache_actions_staging vers cache_actions."""
+    conn = _conn_cache()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if indices_cibles:
+            ph = ",".join("?" for _ in indices_cibles)
+            rows = conn.execute(
+                f"SELECT ticker, date, version, data, last_updated, indice, categorie FROM cache_actions_staging WHERE indice IN ({ph})",
+                indices_cibles
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT ticker, date, version, data, last_updated, indice, categorie FROM cache_actions_staging"
+            ).fetchall()
+
+        if not rows:
+            conn.execute("ROLLBACK")
+            return 0
+
+        tickers_maj = list({r["ticker"] for r in rows})
+        for i in range(0, len(tickers_maj), 200):
+            lot = tickers_maj[i:i + 200]
+            ph = ",".join("?" for _ in lot)
+            conn.execute(f"DELETE FROM cache_actions WHERE ticker IN ({ph})", lot)
+
+        conn.executemany("""
+            INSERT OR REPLACE INTO cache_actions (ticker, date, version, data, last_updated, indice, categorie)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, [(r["ticker"], r["date"], r["version"], r["data"], r["last_updated"], r["indice"], r["categorie"]) for r in rows])
+
+        if indices_cibles:
+            ph = ",".join("?" for _ in indices_cibles)
+            conn.execute(f"DELETE FROM cache_actions_staging WHERE indice IN ({ph})", indices_cibles)
+        else:
+            conn.execute("DELETE FROM cache_actions_staging")
+
+        conn.commit()
+        return len(rows)
+    except Exception as e:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        print(f"Erreur bascule atomique staging -> cache : {e}")
+        return 0
+    finally:
+        conn.close()
 
 
 def lister_entrees_cache(limite: int = 500) -> list[dict]:
@@ -266,6 +398,7 @@ def vider_cache():
         conn = _conn_cache()
         try:
             n = conn.execute("DELETE FROM cache_actions").rowcount
+            conn.execute("DELETE FROM cache_actions_staging")
             conn.commit()
         finally:
             conn.close()
@@ -286,36 +419,54 @@ def _macro_un(nom, symbole):
     vide = {"niveau": None, "var_1m": 0.0, "z": 0.0}
     try:
         c = yf.Ticker(symbole).history(period="6mo")["Close"].dropna()
+        c = c[c > 0]
         if len(c) < 30:
             return nom, vide
-        sig = c.pct_change().dropna().iloc[-63:].std()
-        ret = c.iloc[-1] / c.iloc[-22] - 1
-        z = float(ret / (sig * math.sqrt(21))) if sig and sig > 0 else 0.0
-        return nom, {"niveau": float(c.iloc[-1]), "var_1m": float(ret * 100), "z": max(-4.0, min(4.0, z))}
+        log_ret = np.log(c / c.shift(1)).dropna().iloc[-63:]
+        sig = float(log_ret.std())
+        mu = float(log_ret.mean())
+        ret_arith = float(c.iloc[-1] / c.iloc[-22] - 1.0)
+        ret_log_21 = math.log(float(c.iloc[-1]) / float(c.iloc[-22]))
+        z = float((ret_log_21 - 21.0 * mu) / (sig * math.sqrt(21.0))) if sig > 0 else 0.0
+        return nom, {"niveau": float(c.iloc[-1]), "var_1m": ret_arith * 100.0, "z": max(-4.0, min(4.0, z))}
     except Exception:
         return nom, vide
 
 
-def analyser_tendances_macro():
-    def charger():
-        res = {}
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            for fut in as_completed([ex.submit(_macro_un, n, s) for n, s in MACRO_MAP.items()]):
-                n, v = fut.result()
-                res[n] = v
-        return res
-    return _avec_ttl("macro", 1800, charger)
+def analyser_tendances_macro(forcer_yahoo: bool = False):
+    """Lit la macro en cache SQLite pour les utilisateurs ; interroge Yahoo uniquement si forcer_yahoo=True."""
+    if not forcer_yahoo:
+        en_cache = lire_meta("macro")
+        if isinstance(en_cache, dict) and en_cache:
+            return en_cache
+        return {nom: {"niveau": None, "var_1m": 0.0, "z": 0.0} for nom in MACRO_MAP}
+
+    res = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for fut in as_completed([ex.submit(_macro_un, n, s) for n, s in MACRO_MAP.items()]):
+            n, v = fut.result()
+            res[n] = v
+    if res:
+        ecrire_meta("macro", res)
+    return res
 
 
-def obtenir_taux_sans_risque():
-    def charger():
-        try:
-            niveau = yf.Ticker("^TNX").history(period="5d")["Close"].dropna().iloc[-1]
-            t = float(niveau) / 100.0
-            return t / 10 if t > 0.25 else t
-        except Exception:
-            return 0.042
-    return _avec_ttl("rf", 1800, charger)
+def obtenir_taux_sans_risque(forcer_yahoo: bool = False):
+    if not forcer_yahoo:
+        val = lire_meta("rf_us")
+        if val is not None:
+            return float(val)
+        return 0.042
+
+    try:
+        niveau = yf.Ticker("^TNX").history(period="5d")["Close"].dropna().iloc[-1]
+        t = float(niveau) / 100.0
+        t = t / 10 if t > 0.25 else t
+        ecrire_meta("rf_us", t)
+        return t
+    except Exception:
+        val = lire_meta("rf_us")
+        return float(val) if val is not None else 0.042
 
 
 def taux_change(de, vers):
@@ -353,29 +504,14 @@ def etiquette_macro(industrie, macro):
     return None
 
 
-def _repli_cache_perime(cle_cache, today, secteurs_cibles, raison):
-    """En cas de rate-limit Yahoo Finance, renvoie la dernière entrée valide en cache (< 7j)."""
-    _enregistrer_erreur(raison)
-    ancien = charger_du_cache(cle_cache, today, autoriser_perime=True)
-    if ancien is not None:
-        if secteurs_cibles and ancien.get("secteur") not in secteurs_cibles:
-            return None
-        return ancien
-    return None
-
-
 # --------------------------------------------------------------------------- #
-# Analyse d'une action : métriques BRUTES uniquement
+# Analyse d'une action depuis Yahoo Finance (appelée uniquement par Scheduler / Admin)
 # --------------------------------------------------------------------------- #
-def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None, indice=None):
+def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None,
+                          indice=None, table_cible="cache_actions_staging"):
     today = datetime.today().strftime("%Y-%m-%d")
     hyp = hyp or normaliser_hypotheses(None)
     cle_cache = ticker_symbol + cle_hypotheses(hyp)
-    cache = charger_du_cache(cle_cache, today, max_age_heures=4.0)
-    if cache is not None:
-        if secteurs_cibles and cache.get("secteur") not in secteurs_cibles:
-            return None
-        return cache
 
     try:
         t = None
@@ -388,7 +524,8 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
                     break
             except Exception as e:
                 if tentative == 2:
-                    return _repli_cache_perime(cle_cache, today, secteurs_cibles, f"{ticker_symbol}: {type(e).__name__}")
+                    _enregistrer_erreur(f"{ticker_symbol}: {type(e).__name__}")
+                    return None
             time.sleep(0.6 * (tentative + 1) + random.uniform(0.1, 0.4))
 
         secteur = info.get("sector") or "N/A"
@@ -423,7 +560,8 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         brut = _f(info.get("currentPrice")) or _f(info.get("regularMarketPrice"))
         prix = brut * f_prix if brut else (float(close.iloc[-1]) if close is not None and len(close) else None)
         if not prix or prix <= 0:
-            return _repli_cache_perime(cle_cache, today, secteurs_cibles, f"{ticker_symbol}: cours indisponible (Yahoo)")
+            _enregistrer_erreur(f"{ticker_symbol}: cours indisponible (Yahoo)")
+            return None
 
         if secteurs_cibles and secteur not in secteurs_cibles:
             return None
@@ -442,6 +580,10 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         cash0, dette0 = cash or 0.0, dette or 0.0
         ebitda, ca = m(info.get("ebitda")), m(info.get("totalRevenue"))
         fcf_ttm, eps, bvps = m(info.get("freeCashflow")), m(info.get("trailingEps")), m(info.get("bookValue"))
+        if eps is None and actions and actions > 0:
+            net_inc = m(info.get("netIncomeToCommon"))
+            if net_inc is not None:
+                eps = net_inc / actions
         roe, roa = _f(info.get("returnOnEquity")), _f(info.get("returnOnAssets"))
         marge_op = _f(info.get("operatingMargins"))
 
@@ -512,13 +654,22 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         methode = None
         if fx_ok:
             if est_fin:
-                valo = mm.valorisation_financiere(roe, bvps, ke, g_term, prix, hyp["ecart_ke"])
+                g_term_fin = min(g_term, max(0.0, ke - 0.03))
+                valo = mm.valorisation_financiere(roe, bvps, ke, g_term_fin, prix, hyp["ecart_ke"])
                 methode = "P/B justifié"
             elif fcf_base and fcf_base > 0 and actions:
-                r = mm.valorisation_dcf(fcf_base, actions, cagr_ca, cagr_fcf, ke, g_term, prix, hyp["ecart_g"], hyp["ecart_ke"])
-                valo = {n: r[n] for n in ("bear", "base", "bull")}
-                g1, part_vt, g_imp = r["g1"], r["part_vt"], r["g_implicite"]
-                methode = "DCF"
+                taux_dcf = (wacc / 100.0) if (wacc is not None and wacc > 0) else ke
+                g_term_dcf = min(g_term, max(0.0, taux_dcf - 0.03))
+                dette_nette_ps = (dette0 - cash0) / actions
+                prix_ev = prix + dette_nette_ps
+                prix_ref = prix_ev if prix_ev > 0 else max(prix * 0.1, 1e-6)
+                r = mm.valorisation_dcf(fcf_base, actions, cagr_ca, cagr_fcf, taux_dcf, g_term_dcf, prix_ref, hyp["ecart_g"], hyp["ecart_ke"])
+                for sc in ("bear", "base", "bull"):
+                    ev_ps = _f(r.get(sc))
+                    valo[sc] = max(0.0, ev_ps - dette_nette_ps) if ev_ps is not None else None
+                g1, part_vt = r["g1"], r["part_vt"]
+                g_imp = r["g_implicite"] if prix_ev > 0 else None
+                methode = "DCF (FCFF/WACC)"
             elif not est_fin:
                 alertes.append("FCF négatif ou indisponible : pas de DCF")
         if valo["base"] is not None and not (0.05 <= valo["base"] / prix <= 20):
@@ -560,8 +711,9 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             "macro": etiquette_macro(info.get("industry"), donnees_macro or {}), "alertes": alertes,
         }
         row = json_safe(row)
-        sauvegarder_dans_cache(cle_cache, today, row, indice=indice)
+        sauvegarder_dans_cache(cle_cache, today, row, indice=indice, table=table_cible)
         return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")
-        return _repli_cache_perime(cle_cache, today, secteurs_cibles, f"{ticker_symbol}: {type(e).__name__} {e}")
+        _enregistrer_erreur(f"{ticker_symbol}: {type(e).__name__} {e}")
+        return None

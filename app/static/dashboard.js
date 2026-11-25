@@ -121,13 +121,13 @@ $(function () {
   const COLS_EXPORT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
   const table = $('#tbl').DataTable({
-    data: [], columns: COLONNES, pageLength: 100, order: [[4, 'desc']], autoWidth: false, dom: 'Bfrtip',
+    data: [], columns: COLONNES, pageLength: 100, order: [[4, 'desc']], autoWidth: false, deferRender: true, dom: 'Bfrtip',
     buttons: [
       { extend: 'csv', text: 'Exporter en CSV', exportOptions: { orthogonal: 'export', columns: COLS_EXPORT } },
       { extend: 'excel', text: 'Exporter en Excel', exportOptions: { orthogonal: 'export', columns: COLS_EXPORT } }
     ],
     language: { search: 'Rechercher :', lengthMenu: '_MENU_ lignes', info: '_TOTAL_ titres affichés', infoEmpty: 'Aucun titre',
-      infoFiltered: '(sur _MAX_)', emptyTable: 'Analyse en cours, les premiers titres arrivent…',
+      infoFiltered: '(sur _MAX_)', emptyTable: 'Chargement depuis le cache…',
       zeroRecords: 'Aucun titre ne correspond aux filtres actifs.', paginate: { previous: 'Précédent', next: 'Suivant' } }
   });
 
@@ -355,9 +355,8 @@ $(function () {
     const med = marges.length ? marges[Math.floor(marges.length / 2)] : null;
     const visibles = table.rows({ filter: 'applied' }).count();
     const noteFiltre = visibles < L.length ? ` <strong>(${visibles} visibles avec vos filtres actuels)</strong>` : '';
-    $('#resume').html(`<strong>${L.length}</strong> titres analysés${total ? ' sur ' + total : ''}, dont <strong>${cand}</strong> candidats à l'achat. `
-      + `Marge de sécurité médiane : <strong>${fmt(med, 1, ' %')}</strong>.${noteFiltre}`
-      + (termine ? '' : ' <span class="discret">Classement provisoire tant que l\'analyse n\'est pas terminée.</span>'));
+    $('#resume').html(`<strong>${L.length}</strong> titres en cache${total ? ' sur ' + total : ''}, dont <strong>${cand}</strong> candidats à l'achat. `
+      + `Marge de sécurité médiane : <strong>${fmt(med, 1, ' %')}</strong>.${noteFiltre}`);
   }
 
   let minuterie = null;
@@ -368,7 +367,7 @@ $(function () {
       if (document.activeElement && $(document.activeElement).closest('.dataTables_filter').length) return;
       table.draw(false);
       majResume();
-    }, 250);
+    }, 100);
   };
 
   const reglages = window.Reglages ? encodeURIComponent(JSON.stringify(window.Reglages.serveur())) : '';
@@ -377,9 +376,10 @@ $(function () {
 
   src.addEventListener('init', e => {
     try {
-      total = JSON.parse(e.data).total;
-      $('#etat').text(`Analyse de ${total} titres…`);
-    } catch (err) { console.error('Erreur init SSE:', err); }
+      const info = JSON.parse(e.data);
+      total = info.total;
+      $('#etat').text(`Chargement depuis le cache (${info.en_cache || 0} / ${total} titres)…`);
+    } catch (err) {}
   });
 
   src.addEventListener('statut', e => {
@@ -400,22 +400,15 @@ $(function () {
         lignes[r.ticker] = table.row.add(r);
       }
       redessiner();
-    } catch (err) {
-      console.error('Erreur parsing ligne SSE:', err);
-    }
+    } catch (err) {}
   };
 
   src.addEventListener('progress', e => {
     try {
       const p = JSON.parse(e.data);
-      const fait = p.done || 0;
       const recus = p.recus !== undefined ? p.recus : Object.keys(donnees).length;
-      const errs = p.erreurs || 0;
-      $('#barre').attr('value', total ? fait / total : 0);
-      let txt = `${fait} / ${total} titres traités (${recus} reçus`;
-      if (errs > 0) txt += `, ${errs} limités/ignorés`;
-      txt += ')';
-      $('#etat').text(txt);
+      $('#barre').attr('value', total ? recus / total : 0);
+      $('#etat').text(`${recus} / ${total} titres chargés depuis le cache`);
     } catch (err) {}
   });
 
@@ -429,9 +422,7 @@ $(function () {
         }
       });
       redessiner();
-    } catch (err) {
-      console.error('Erreur scores SSE:', err);
-    }
+    } catch (err) {}
   });
 
   src.addEventListener('close', () => {
@@ -440,9 +431,9 @@ $(function () {
     $('#barre').attr('value', 1);
     const nbRecus = Object.keys(donnees).length;
     if (nbRecus === 0) {
-      $('#etat').html('<span style="color:var(--rouge);">Analyse terminée : 0 titre reçu (Yahoo Finance limite temporairement les requêtes sur le serveur). Patientez 1 à 2 minutes puis rechargez.</span>');
+      $('#etat').html('<span style="color:var(--rouge);">Aucune donnée en cache pour cet indice. Lancez un chargement depuis l\'interface Admin.</span>');
     } else {
-      $('#etat').text(`Analyse terminée (${nbRecus} / ${total} titres chargés).`);
+      $('#etat').text(`Données chargées depuis le cache (${nbRecus} / ${total} titres).`);
     }
     table.draw(false);
     majResume();

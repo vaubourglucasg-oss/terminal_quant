@@ -116,6 +116,85 @@
             </div>
         </div>
     </div>
+    <section class="card" style="margin-top: 1.5rem; padding: 1.25rem;">
+  <h2 style="margin-top: 0;">Chargement manuel depuis Yahoo Finance</h2>
+  <p style="opacity: 0.8; font-size: 0.9rem;">
+    Les données en cours de téléchargement sont préparées en arrière-plan (staging). Le cache actif des utilisateurs n'est mis à jour atomiquement qu'une fois le chargement complet terminé.
+  </p>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin: 1rem 0;">
+    <select id="admin-select-indice" style="padding: 0.5rem 0.75rem; border-radius: 6px;">
+      {% for reg, marches in regions.items() %}
+        <optgroup label="{{ reg }}">
+          {% for m in marches %}
+            <option value="{{ m }}">{{ m }}</option>
+          {% endfor %}
+        </optgroup>
+      {% endfor %}
+    </select>
+    <button type="button" id="btn-refresh-indice" class="btn">Charger cet indice</button>
+    <button type="button" id="btn-refresh-all" class="btn">Tout recharger (20 indices)</button>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin: 0.75rem 0;">
+    <input type="text" id="admin-input-ticker" placeholder="Ex: AAPL ou MC.PA" style="padding: 0.5rem 0.75rem; border-radius: 6px; width: 180px;">
+    <button type="button" id="btn-refresh-ticker" class="btn">Recharger ce ticker</button>
+  </div>
+
+  <div id="admin-refresh-box" style="margin-top: 1rem; padding: 0.75rem; border-radius: 6px; background: rgba(255,255,255,0.04); font-size: 0.9rem;">
+    <div><strong>État :</strong> <span id="admin-refresh-etat">{{ 'En cours (' + etat_refresh.mode + ' – ' + etat_refresh.cible + ')' if etat_refresh.en_cours else 'Inactif' }}</span></div>
+    <div><strong>Progression :</strong> <span id="admin-refresh-prog">{{ etat_refresh.faits }} / {{ etat_refresh.total }} ({{ etat_refresh.reussis }} réussis, {{ etat_refresh.echecs }} ignorés)</span></div>
+    <div><strong>Dernière bascule atomique :</strong> <span id="admin-refresh-bascule">{{ etat_refresh.derniere_bascule or 'Aucune' }}</span></div>
+  </div>
+</section>
+
+<script>
+(function () {
+  const etatEl = document.getElementById('admin-refresh-etat');
+  const progEl = document.getElementById('admin-refresh-prog');
+  const basculeEl = document.getElementById('admin-refresh-bascule');
+
+  async function actualiserStatut() {
+    try {
+      const r = await fetch('/api/admin/cache/refresh-status');
+      if (!r.ok) return;
+      const d = await r.json();
+      const rf = d.refresh || {};
+      etatEl.textContent = rf.en_cours ? `En cours (${rf.mode} – ${rf.cible})` : 'Inactif';
+      progEl.textContent = `${rf.faits || 0} / ${rf.total || 0} (${rf.reussis || 0} réussis, ${rf.echecs || 0} ignorés)`;
+      basculeEl.textContent = rf.derniere_bascule || 'Aucune';
+    } catch (e) {}
+  }
+
+  document.getElementById('btn-refresh-indice').addEventListener('click', async () => {
+    const idx = document.getElementById('admin-select-indice').value;
+    const r = await fetch(`/api/admin/cache/refresh-index/${encodeURIComponent(idx)}`, { method: 'POST' });
+    const d = await r.json();
+    alert(d.message || 'Demande envoyée');
+    actualiserStatut();
+  });
+
+  document.getElementById('btn-refresh-all').addEventListener('click', async () => {
+    if (!confirm('Lancer la mise à jour complète des 20 indices en arrière-plan ?')) return;
+    const r = await fetch('/api/admin/cache/refresh-all', { method: 'POST' });
+    const d = await r.json();
+    alert(d.message || 'Demande envoyée');
+    actualiserStatut();
+  });
+
+  document.getElementById('btn-refresh-ticker').addEventListener('click', async () => {
+    const tk = document.getElementById('admin-input-ticker').value.trim().toUpperCase();
+    if (!tk) return;
+    etatEl.textContent = `Chargement de ${tk}…`;
+    const r = await fetch(`/api/admin/cache/refresh-ticker/${encodeURIComponent(tk)}`, { method: 'POST' });
+    const d = await r.json();
+    alert(r.ok ? `${d.ticker} (${d.nom}) mis à jour à ${d.prix}` : (d.detail || 'Erreur'));
+    actualiserStatut();
+  });
+
+  setInterval(actualiserStatut, 4000);
+})();
+</script>
 
     <!-- Journal des signaux -->
     <h2>Journal des signaux</h2>

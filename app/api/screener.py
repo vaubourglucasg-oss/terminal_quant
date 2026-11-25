@@ -9,10 +9,10 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro, obtenir_taux_sans_risque,
-                                obtenir_benchmark, json_safe, ETAT_ERREURS, normaliser_hypotheses, vider_cache,
+from app.engine.fetcher import (analyser_tendances_macro, charger_lot_du_cache, charger_du_cache,
+                                lire_meta, ecrire_meta, json_safe, normaliser_hypotheses, vider_cache,
                                 cle_hypotheses)
-from app.engine.scoring import calculer_scores, normaliser_reglages, _borne
+from app.engine.scoring import calculer_scores, normaliser_reglages
 from app.engine.journal import journaliser_scan
 from app.engine.graphiques import generer_graphique, PERIODES_VALIDES
 from app.api.auth_routes import require_admin, get_current_user
@@ -24,15 +24,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 SANS_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
-DELAI_MACRO, DELAI_RF, DELAI_BENCH, DELAI_LISTE = 25, 10, 15, 20
-CONCURRENCE = 3                      # 3 workers max sur Cloud Run pour éviter HTTP 429 Yahoo Finance
 
 
 def lire_reglages(brut):
     brut = brut if isinstance(brut, dict) else {}
     return {"score": normaliser_reglages(brut), "hyp": normaliser_hypotheses(brut.get("hyp")),
-            "exclure_fin": brut.get("exclure_fin") is True,
-            "concurrence": int(_borne(brut.get("concurrence"), 1, 6, CONCURRENCE))}
+            "exclure_fin": brut.get("exclure_fin") is True}
 
 
 RE_TICKER = re.compile(r"^[A-Za-z0-9.\-&^=]{1,20}$")
@@ -72,15 +69,21 @@ TICKERS_PAR_INDICE = {
 
 def obtenir_tickers_pour_indice(indice: str):
     if indice in ("SP 500", "S&P 500"):
+        en_cache = lire_meta("tickers_sp500")
         try:
             url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
             tickers = pd.read_csv(url)["Symbol"].dropna().astype(str).tolist()
-            return [t.replace(".", "-") for t in tickers]
+            clean = [t.replace(".", "-") for t in tickers]
+            if len(clean) > 400:
+                ecrire_meta("tickers_sp500", clean)
+                return clean
         except Exception as e:
-            print(f"Erreur chargement S&P 500: {e}")
-            return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JNJ", "JPM", "V",
-                    "PG", "MA", "HD", "CVX", "ABBV", "LLY", "MRK", "PEP", "COST", "PFE", "KO", "TMO", "AVGO",
-                    "MCD", "WMT", "CRM", "CSCO", "ABT", "BAC", "ACN", "LIN"]
+            print(f"Erreur chargement liste S&P 500: {e}")
+        if isinstance(en_cache, list) and len(en_cache) > 400:
+            return en_cache
+        return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JNJ", "JPM", "V",
+                "PG", "MA", "HD", "CVX", "ABBV", "LLY", "MRK", "PEP", "COST", "PFE", "KO", "TMO", "AVGO",
+                "MCD", "WMT", "CRM", "CSCO", "ABT", "BAC", "ACN", "LIN"]
     return TICKERS_PAR_INDICE.get(indice, ["MC.PA", "TTE.PA", "AI.PA"])
 
 
@@ -164,7 +167,7 @@ def contexte_macro(m):
 
 
 async def _contexte():
-    macro = await asyncio.to_thread(analyser_tendances_macro)
+    macro = await asyncio.to_thread(analyser_tendances_macro, False)
     recoms = analyser_recommandations_tous_indices(macro)
     regions = [{"nom": reg, "marches": [{"nom": n, "nb": len(TICKERS_PAR_INDICE[n]) if n in TICKERS_PAR_INDICE else 500,
                                           **recoms[n]} for n in noms]} for reg, noms in REGIONS.items()]
@@ -201,6 +204,7 @@ async def dashboard_view(request: Request, indice: str = "CAC 40", secteur: str 
 
 @router.get("/stream")
 async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", secteur: str = "", r: str = ""):
+    """Lit EXCLUSIVEMENT depuis le cache SQLite (zéro appel Yahoo Finance côté utilisateur)."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Connexion requise")
@@ -213,64 +217,50 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
     def evt(nom, payload):
         return f"event: {nom}\ndata: {json.dumps(json_safe(payload), allow_nan=False)}\n\n"
 
-    async def avec_delai(fonction, delai, defaut, *args):
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(fonction, *args), delai)
-        except Exception as e:
-            print(f"{getattr(fonction, '__name__', fonction)} : {type(e).__name__} {e}")
-            return defaut
-
     async def generer():
-        yield evt("statut", {"msg": "Chargement du contexte de marché…"})
-        macro, rf, bench, tickers = await asyncio.gather(
-            avec_delai(analyser_tendances_macro, DELAI_MACRO, {}),
-            avec_delai(obtenir_taux_sans_risque, DELAI_RF, 0.042),
-            avec_delai(obtenir_benchmark, DELAI_BENCH, None, indice),
-            avec_delai(obtenir_tickers_pour_indice, DELAI_LISTE, [], indice))
+        yield evt("statut", {"msg": "Lecture du cache…"})
+        tickers = await asyncio.to_thread(obtenir_tickers_pour_indice, indice)
         tickers = list(dict.fromkeys(tickers))
         if not tickers:
-            yield evt("statut", {"msg": "Aucun titre à analyser pour cet indice (liste introuvable)."})
+            yield evt("statut", {"msg": "Aucun titre référencé pour cet indice."})
             yield "event: close\ndata: end\n\n"
             return
-        ETAT_ERREURS.update(n=0, derniere="")
-        if reg["hyp"]["rf"] is not None:
-            rf = reg["hyp"]["rf"]
-        sem = asyncio.Semaphore(reg["concurrence"])
 
-        def scorer(lignes_):
-            utiles = [l for l in lignes_ if not (reg["exclure_fin"] and l.get("est_fin"))]
-            return calculer_scores(utiles, reg["score"])
+        suffixe_hyp = cle_hypotheses(reg["hyp"])
+        cles_recherche = [tk + suffixe_hyp for tk in tickers] if suffixe_hyp else tickers
+        cache_map = await asyncio.to_thread(charger_lot_du_cache, cles_recherche)
+        if suffixe_hyp and len(cache_map) < len(tickers):
+            manquants = [tk for tk in tickers if (tk + suffixe_hyp) not in cache_map]
+            fallback_map = await asyncio.to_thread(charger_lot_du_cache, manquants)
+            for tk, val in fallback_map.items():
+                cache_map[tk + suffixe_hyp] = val
 
-        async def travailleur(tk):
-            async with sem:
-                try:
-                    return await asyncio.to_thread(analyser_action_brute, tk, secteurs_cibles, rf, macro, bench, reg["hyp"], indice)
-                except Exception as e:
-                    print(f"{tk}: {e}")
-                    return None
+        lignes = []
+        for idx, tk in enumerate(tickers):
+            cle = tk + suffixe_hyp if suffixe_hyp else tk
+            row = cache_map.get(cle)
+            if row and (not secteurs_cibles or row.get("secteur") in secteurs_cibles):
+                lignes.append(row)
 
-        taches = [asyncio.create_task(travailleur(tk)) for tk in tickers]
-        lignes, faits = [], 0
-        try:
-            yield evt("init", {"total": len(tickers)})
-            for futur in asyncio.as_completed(taches):
-                res = await futur
-                faits += 1
-                if res:
-                    lignes.append(res)
-                    yield f"data: {json.dumps(json_safe(res), allow_nan=False)}\n\n"
-                yield evt("progress", {"done": faits, "recus": len(lignes), "erreurs": ETAT_ERREURS["n"],
-                                       "derniere": ETAT_ERREURS["derniere"]})
-                if res and (len(lignes) == 10 or len(lignes) % 20 == 0):
-                    yield evt("scores", scorer(lignes))
-            yield evt("scores", scorer(lignes))
-            ok, raison = await asyncio.to_thread(journaliser_scan, indice, lignes, len(tickers), secteurs_cibles,
-                                                 cle_hypotheses(reg["hyp"]) == "")
-            print(f"journal des signaux [{indice}] : {'enregistré' if ok else 'ignoré'} ({raison})")
-            yield "event: close\ndata: end\n\n"
-        finally:
-            for t in taches:
-                t.cancel()
+        yield evt("init", {"total": len(tickers), "en_cache": len(lignes)})
+
+        for i, row in enumerate(lignes):
+            yield f"data: {json.dumps(json_safe(row), allow_nan=False)}\n\n"
+            if (i + 1) % 50 == 0 or (i + 1) == len(lignes):
+                yield evt("progress", {"done": len(tickers), "recus": i + 1, "erreurs": 0})
+
+        if not lignes:
+            yield evt("progress", {"done": len(tickers), "recus": 0, "erreurs": 0})
+
+        if lignes:
+            utiles = [l for l in lignes if not (reg["exclure_fin"] and l.get("est_fin"))]
+            scores = await asyncio.to_thread(calculer_scores, utiles, reg["score"])
+            yield evt("scores", scores)
+            await asyncio.to_thread(
+                journaliser_scan, indice, lignes, len(tickers), secteurs_cibles, suffixe_hyp == ""
+            )
+
+        yield "event: close\ndata: end\n\n"
 
     return StreamingResponse(generer(), media_type="text/event-stream",
                              headers={**SANS_CACHE, "X-Accel-Buffering": "no"})
@@ -304,13 +294,12 @@ async def detail_actualites(ticker: str):
 
 @router.get("/api/titre/{ticker}")
 async def titre_isole(ticker: str):
+    """Lit le titre depuis le cache SQLite (pas d'appel Yahoo côté utilisateur)."""
     if not RE_TICKER.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker invalide")
-    macro, rf = await asyncio.gather(asyncio.to_thread(analyser_tendances_macro),
-                                     asyncio.to_thread(obtenir_taux_sans_risque))
-    ligne = await asyncio.to_thread(analyser_action_brute, ticker.upper(), [], rf, macro, None)
+    ligne = await asyncio.to_thread(charger_du_cache, ticker.upper(), None, 4.0, True)
     if not ligne:
-        raise HTTPException(status_code=404, detail="Titre introuvable ou données insuffisantes")
+        raise HTTPException(status_code=404, detail="Titre absent du cache (rechargez-le depuis l'interface Admin)")
     return ligne
 
 
