@@ -2,6 +2,7 @@ import os
 import math
 import json
 import time
+import random
 import sqlite3
 import threading
 import hashlib
@@ -15,7 +16,8 @@ import yfinance as yf
 from app.engine import math_models as mm
 
 racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-db_cache_path = os.path.join(racine, "cache_bourse_v3.db")
+DATA_DIR = os.environ.get("DATA_DIR", "").strip() or racine
+db_cache_path = os.path.join(DATA_DIR, "cache_bourse_v3.db")
 VERSION_SCHEMA = 3          # à incrémenter quand la structure des lignes change : invalide le cache
 
 # --------------------------------------------------------------------------- #
@@ -49,8 +51,6 @@ def cle_hypotheses(hyp):
     return "|" + hashlib.md5(json.dumps(arrondi(hyp), sort_keys=True).encode()).hexdigest()[:8]
 
 
-# Taux sans risque par devise (fraction, ex. {"JPY": 0.012, "EUR": 0.028}). VIDE par défaut : tout est alors
-# actualisé avec le 10 ans américain, ce qui pénalise les marchés à taux bas (Japon, Suisse, zone euro).
 RF_LOCAL = {}
 
 BENCHMARKS = {
@@ -60,7 +60,6 @@ BENCHMARKS = {
     "SMI Suisse": "^SSMI", "OMXS30": "^OMX", "Nikkei 225": "^N225", "Hang Seng": "^HSI",
     "CSI 300": "000300.SS", "ASX 200": "^AXJO", "Nifty 50": "^NSEI", "Bovespa": "^BVSP",
 }
-# Yahoo cote certaines places en sous-unité (pence...) alors que les états financiers sont en unité
 DEVISES_SOUS_UNITE = {"GBp": ("GBP", 0.01), "GBX": ("GBP", 0.01), "ILA": ("ILS", 0.01), "ZAc": ("ZAR", 0.01)}
 
 MACRO_MAP = {
@@ -79,11 +78,16 @@ LIENS_MACRO = [("Gold", "Or"), ("Uranium", "Uranium"), ("Oil", "Pétrole WTI"), 
 # --------------------------------------------------------------------------- #
 _verrou = threading.Lock()
 _ttl = {}
-ETAT_ERREURS = {"n": 0, "derniere": ""}      # affiché dans l'interface quand Yahoo refuse ou limite les requêtes
+ETAT_ERREURS = {"n": 0, "derniere": ""}
+
+
+def _enregistrer_erreur(msg: str):
+    with _verrou:
+        ETAT_ERREURS["n"] += 1
+        ETAT_ERREURS["derniere"] = str(msg)[:160]
 
 
 def _avec_ttl(cle, ttl, fabrique):
-    """Cache mémoire à durée de vie (évite 21 téléchargements macro à chaque page)."""
     now = time.time()
     with _verrou:
         v = _ttl.get(cle)
@@ -96,7 +100,6 @@ def _avec_ttl(cle, ttl, fabrique):
 
 
 def _f(x):
-    """float propre ou None (rejette NaN, inf, chaînes comme 'Infinity')."""
     try:
         x = float(x)
     except (TypeError, ValueError):
@@ -119,7 +122,7 @@ def json_safe(o):
 
 
 # --------------------------------------------------------------------------- #
-# Cache SQLite (JSON au lieu de pickle : lisible, sûr, versionné)
+# Cache SQLite (compatible disque local et montage Cloud Storage FUSE)
 # --------------------------------------------------------------------------- #
 def _conn_cache():
     dossier = os.path.dirname(db_cache_path)
@@ -127,8 +130,9 @@ def _conn_cache():
         os.makedirs(dossier, exist_ok=True)
     conn = sqlite3.connect(db_cache_path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    est_fuse = db_cache_path.startswith("/mnt/") or db_cache_path.startswith("/gcs/")
+    conn.execute(f"PRAGMA journal_mode={'DELETE' if est_fuse else 'WAL'}")
+    conn.execute("PRAGMA busy_timeout=15000")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
@@ -148,7 +152,6 @@ def init_cache_db():
                 PRIMARY KEY (ticker, date, version)
             )
         """)
-        # Migration dynamique des colonnes si table préexistante
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(cache_actions)").fetchall()]
         if "last_updated" not in cols:
             conn.execute("ALTER TABLE cache_actions ADD COLUMN last_updated TEXT")
@@ -162,17 +165,24 @@ def init_cache_db():
     finally:
         conn.close()
 
-def charger_du_cache(ticker, date_str, max_age_heures: float = 4.0):
+
+def charger_du_cache(ticker, date_str, max_age_heures: float = 4.0, autoriser_perime: bool = False):
     try:
         conn = _conn_cache()
         try:
-            row = conn.execute(
-                "SELECT data, last_updated FROM cache_actions WHERE ticker=? AND date=? AND version=?",
-                (ticker, date_str, VERSION_SCHEMA)
-            ).fetchone()
+            if autoriser_perime:
+                row = conn.execute(
+                    "SELECT data, last_updated FROM cache_actions WHERE ticker=? AND version=? ORDER BY date DESC, last_updated DESC LIMIT 1",
+                    (ticker, VERSION_SCHEMA)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT data, last_updated FROM cache_actions WHERE ticker=? AND date=? AND version=?",
+                    (ticker, date_str, VERSION_SCHEMA)
+                ).fetchone()
             if not row:
                 return None
-            if max_age_heures and row["last_updated"]:
+            if not autoriser_perime and max_age_heures and row["last_updated"]:
                 try:
                     maj = datetime.fromisoformat(row["last_updated"].replace("Z", "+00:00"))
                     if (datetime.now(timezone.utc) - maj).total_seconds() > max_age_heures * 3600.0:
@@ -197,7 +207,7 @@ def sauvegarder_dans_cache(ticker, date_str, data, indice=None, categorie="actio
             conn.execute("""
                 INSERT OR REPLACE INTO cache_actions (ticker, date, version, data, last_updated, indice, categorie)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (ticker, date_str, VERSION_SCHEMA, json.dumps(data), now_iso, indice, categorie))
+            """, (ticker, date_str, VERSION_SCHEMA, json.dumps(json_safe(data)), now_iso, indice, categorie))
             conn.commit()
         finally:
             conn.close()
@@ -206,7 +216,6 @@ def sauvegarder_dans_cache(ticker, date_str, data, indice=None, categorie="actio
 
 
 def lister_entrees_cache(limite: int = 500) -> list[dict]:
-    """Liste les entrées en cache avec leur fraîcheur, indice et taille."""
     conn = _conn_cache()
     try:
         rows = conn.execute("""
@@ -221,7 +230,6 @@ def lister_entrees_cache(limite: int = 500) -> list[dict]:
 
 
 def supprimer_entree_cache(ticker: str, date_str: str = None) -> int:
-    """Supprime une entrée spécifique du cache par ticker et optionnellement date."""
     conn = _conn_cache()
     try:
         if date_str:
@@ -236,7 +244,6 @@ def supprimer_entree_cache(ticker: str, date_str: str = None) -> int:
 
 
 def supprimer_cache_indice(indice: str, tickers: list[str] = None) -> int:
-    """Supprime toutes les entrées associées à un indice spécifique (tagué par l'indice ou liste de tickers)."""
     conn = _conn_cache()
     try:
         cur1 = conn.execute("DELETE FROM cache_actions WHERE indice = ?", (indice,))
@@ -254,7 +261,6 @@ def supprimer_cache_indice(indice: str, tickers: list[str] = None) -> int:
 
 
 def vider_cache():
-    """Vide le cache des analyses et la mémoire à durée de vie (macro, taux, change). Retourne le nombre de lignes."""
     n = 0
     try:
         conn = _conn_cache()
@@ -277,9 +283,6 @@ init_cache_db()
 # Macro, taux, change, indice de référence
 # --------------------------------------------------------------------------- #
 def _macro_un(nom, symbole):
-    """Niveau, variation 1 mois et z-score : rendement 21 j / (vol quotidienne 3 mois × √21).
-    Le z-score rend comparables un pétrole volatil et un dollar calme ; l'ancien écart à la MM40 en %
-    était comparé à des seuils (« VIX < 18 ») qui n'avaient rien à voir avec son unité."""
     vide = {"niveau": None, "var_1m": 0.0, "z": 0.0}
     try:
         c = yf.Ticker(symbole).history(period="6mo")["Close"].dropna()
@@ -296,7 +299,7 @@ def _macro_un(nom, symbole):
 def analyser_tendances_macro():
     def charger():
         res = {}
-        with ThreadPoolExecutor(max_workers=10) as ex:
+        with ThreadPoolExecutor(max_workers=6) as ex:
             for fut in as_completed([ex.submit(_macro_un, n, s) for n, s in MACRO_MAP.items()]):
                 n, v = fut.result()
                 res[n] = v
@@ -309,7 +312,7 @@ def obtenir_taux_sans_risque():
         try:
             niveau = yf.Ticker("^TNX").history(period="5d")["Close"].dropna().iloc[-1]
             t = float(niveau) / 100.0
-            return t / 10 if t > 0.25 else t         # ancien format Yahoo : taux × 10
+            return t / 10 if t > 0.25 else t
         except Exception:
             return 0.042
     return _avec_ttl("rf", 1800, charger)
@@ -350,36 +353,51 @@ def etiquette_macro(industrie, macro):
     return None
 
 
+def _repli_cache_perime(cle_cache, today, secteurs_cibles, raison):
+    """En cas de rate-limit Yahoo Finance, renvoie la dernière entrée valide en cache (< 7j)."""
+    _enregistrer_erreur(raison)
+    ancien = charger_du_cache(cle_cache, today, autoriser_perime=True)
+    if ancien is not None:
+        if secteurs_cibles and ancien.get("secteur") not in secteurs_cibles:
+            return None
+        return ancien
+    return None
+
+
 # --------------------------------------------------------------------------- #
-# Analyse d'une action : métriques BRUTES uniquement (le scoring relatif est fait ensuite, sur l'ensemble)
+# Analyse d'une action : métriques BRUTES uniquement
 # --------------------------------------------------------------------------- #
 def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None, indice=None):
     today = datetime.today().strftime("%Y-%m-%d")
     hyp = hyp or normaliser_hypotheses(None)
-    cle_cache = ticker_symbol + cle_hypotheses(hyp)      # des hypothèses différentes = des résultats différents
-    cache = charger_du_cache(cle_cache, today)
+    cle_cache = ticker_symbol + cle_hypotheses(hyp)
+    cache = charger_du_cache(cle_cache, today, max_age_heures=4.0)
     if cache is not None:
         if secteurs_cibles and cache.get("secteur") not in secteurs_cibles:
             return None
         return cache
 
     try:
-        t = yf.Ticker(ticker_symbol)
-        info = t.info or {}
-        if not info or not info.get("shortName"):
-            time.sleep(1.5)
+        t = None
+        info = {}
+        for tentative in range(3):
             try:
                 t = yf.Ticker(ticker_symbol)
                 info = t.info or {}
-            except Exception:
-                pass
+                if info and (info.get("shortName") or info.get("currentPrice") or info.get("regularMarketPrice")):
+                    break
+            except Exception as e:
+                if tentative == 2:
+                    return _repli_cache_perime(cle_cache, today, secteurs_cibles, f"{ticker_symbol}: {type(e).__name__}")
+            time.sleep(0.6 * (tentative + 1) + random.uniform(0.1, 0.4))
+
         secteur = info.get("sector") or "N/A"
-        if secteurs_cibles and secteur not in secteurs_cibles:
+        if secteurs_cibles and secteur != "N/A" and secteur not in secteurs_cibles:
             return None
         est_fin = secteur == "Financial Services"
         alertes = []
 
-        # ---- devises : cote (pence → livres), états financiers, conversion ----
+        # ---- devises ----
         devise_brute = info.get("currency") or "USD"
         devise, f_prix = DEVISES_SOUS_UNITE.get(devise_brute, (devise_brute, 1.0))
         dev_fin = info.get("financialCurrency") or devise
@@ -405,7 +423,11 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         brut = _f(info.get("currentPrice")) or _f(info.get("regularMarketPrice"))
         prix = brut * f_prix if brut else (float(close.iloc[-1]) if close is not None and len(close) else None)
         if not prix or prix <= 0:
+            return _repli_cache_perime(cle_cache, today, secteurs_cibles, f"{ticker_symbol}: cours indisponible (Yahoo)")
+
+        if secteurs_cibles and secteur not in secteurs_cibles:
             return None
+
         rf = RF_LOCAL.get(devise, rf_us)
         mk = mm.metriques_marche(close, rf, bench)
         if mk["prix"] is None:
@@ -461,7 +483,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             fcf_l = [(a + b) if a is not None and b is not None else None for a, b in zip(cfo_l, capex_l)]
         cagr_fcf = mm.cagr_serie(fcf_l)
         fcf_hist = [m(x) for x in fcf_l[:3] if x is not None]
-        fcf_base = float(np.mean(fcf_hist)) if len(fcf_hist) >= 2 else fcf_ttm    # FCF normalisé sur 3 ans
+        fcf_base = float(np.mean(fcf_hist)) if len(fcf_hist) >= 2 else fcf_ttm
 
         # ---- coût du capital, rentabilité ----
         beta = mk["beta"] if mk["beta"] is not None else (_f(info.get("beta")) or 1.0)
@@ -480,7 +502,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         ebitda_yield = ebitda / ev * 100 if (ev and ev > 0 and ebitda is not None and not est_fin) else None
         fcf_yield = fcf_ttm / cap * 100 if (cap and fcf_ttm is not None and not est_fin and fx_ok) else None
         earn_yield = (eps / prix * 100) if (eps is not None and fx_ok) else (100 / per if per else None)
-        div = _f(info.get("trailingAnnualDividendYield"))      # fraction stable (dividendYield a changé d'unité)
+        div = _f(info.get("trailingAnnualDividendYield"))
         div_yield = div * 100 if div is not None else None
 
         # ---- valeur intrinsèque ----
@@ -517,24 +539,18 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
             "url": f"https://finance.yahoo.com/quote/{ticker_symbol}/profile",
             "maj": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC"),
             "indice": indice,
-            # valorisation
             "per": per, "ev_ebitda": ev_ebitda, "ebitda_yield": ebitda_yield, "fcf_yield": fcf_yield,
             "earn_yield": earn_yield, "div_yield": div_yield,
-            # rentabilité
             "roic": roic, "wacc": wacc, "spread": spread, "marge_op": marge_op * 100 if marge_op is not None else None,
             "roe": roe * 100 if roe is not None else None, "roa": roa * 100 if roa is not None else None, "ke": ke * 100,
-            # solidité
             "nd_ebitda": nd_ebitda, "de": de, "altman": altman, "altman_zone": zone,
             "piotroski": pio if pio_n else None, "piotroski_n": pio_n,
-            # croissance
             "cagr_ca": cagr_ca * 100 if cagr_ca is not None else None,
             "cagr_fcf": cagr_fcf * 100 if cagr_fcf is not None else None,
-            # marché / risque
             "vol": mk["vol"], "mdd": mk["mdd"], "rdt_1a": mk["rdt_1a"], "sharpe": mk["sharpe"], "sortino": mk["sortino"],
             "beta": beta if (mk["beta"] is not None or info.get("beta")) else None,
             "beta_local": mk["beta"] is not None, "mom_12_1": mk["mom_12_1"],
-            "dist_ma200": mk["dist_ma200"],"dist_ma50": mk.get("dist_ma50"), "dist_52w": mk["dist_52w"], "rsi": mk["rsi"],
-            # valeur intrinsèque
+            "dist_ma200": mk["dist_ma200"], "dist_ma50": mk.get("dist_ma50"), "dist_52w": mk["dist_52w"], "rsi": mk["rsi"],
             "methode_valo": methode, "valo_bear": valo["bear"], "valo_base": valo["base"], "valo_bull": valo["bull"],
             "marge_secu": mm.marge_securite(valo["base"], prix),
             "g_retenue": g1 * 100 if g1 is not None else None,
@@ -548,7 +564,4 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         return row
     except Exception as e:
         print(f"Erreur sur {ticker_symbol} : {e}")
-        with _verrou:
-            ETAT_ERREURS["n"] += 1
-            ETAT_ERREURS["derniere"] = f"{ticker_symbol}: {type(e).__name__} {e}"[:160]
-        return None
+        return _repli_cache_perime(cle_cache, today, secteurs_cibles, f"{ticker_symbol}: {type(e).__name__} {e}")

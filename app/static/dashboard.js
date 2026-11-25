@@ -9,7 +9,6 @@ $(function () {
   let favoris = {};
   try { favoris = JSON.parse(localStorage.getItem('quant_favoris') || '{}'); } catch (e) { favoris = {}; }
 
-  // Synchronisation des favoris avec la base SQLite
   fetch('/api/user/favorites')
     .then(r => r.ok ? r.json() : null)
     .then(d => {
@@ -31,10 +30,9 @@ $(function () {
   const lignes = {};
   let total = 0, termine = false;
 
-  // ---------- utilitaires ----------
   const ND = '<span class="nd">–</span>';
   const vide = v => v === null || v === undefined || Number.isNaN(v);
-  const fmt = (v, d = 1, suf = '') => vide(v) ? ND : v.toFixed(d).replace('.', ',') + suf;
+  const fmt = (v, d = 1, suf = '') => vide(v) ? ND : Number(v).toFixed(d).replace('.', ',') + suf;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const SECTEURS_FR = { 'Technology': 'Technologie', 'Healthcare': 'Santé', 'Financial Services': 'Finance',
     'Consumer Cyclical': 'Conso. cyclique', 'Consumer Defensive': 'Conso. défensive', 'Industrials': 'Industrie',
@@ -42,7 +40,6 @@ $(function () {
     'Real Estate': 'Immobilier', 'Communication Services': 'Communication' };
   const classeSigne = v => vide(v) ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
 
-  // Exposer immédiatement pour le comparateur
   Object.assign(window.Quant, { donnees, esc, fmt, vide, SECTEURS_FR });
 
   function colNum(champ, titre, aide, d, suf, classeFn) {
@@ -58,7 +55,6 @@ $(function () {
 
   const dl = (label, valeur, aide) => `<div><dt title="${esc(aide || '')}">${label}</dt><dd>${valeur}</dd></div>`;
 
-  // ---------- COLONNES ----------
   const COLONNES = [
     { data: null, orderable: false, className: 't-g', title: '', width: '52px',
       render: (d, type, r) => type === 'display'
@@ -118,14 +114,12 @@ $(function () {
     colNum('cagr_ca', 'Croiss. CA 3 ans', 'Croissance annuelle moyenne du chiffre d\'affaires sur 3 ans.', 1, ' %', classeSigne),
     colNum('vol', 'Volatilité', 'Volatilité annualisée sur 1 an.', 0, ' %'),
     colNum('mom_12_1', 'Momentum 12-1', 'Performance sur 12 mois en excluant le dernier mois.', 0, ' %', classeSigne),
-    // Ajoute ceci tout à la fin de la constante COLONNES (juste avant l'export)
     { data: 'maj', defaultContent: '', className: 't-g discret', title: 'Mise à jour',
-        render: (v, type) => type === 'display' ? esc(v) : v },
-    ];
+      render: (v, type) => type === 'display' ? esc(v) : v },
+  ];
 
   const COLS_EXPORT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
-  // ---------- tableau ----------
   const table = $('#tbl').DataTable({
     data: [], columns: COLONNES, pageLength: 100, order: [[4, 'desc']], autoWidth: false, dom: 'Bfrtip',
     buttons: [
@@ -134,12 +128,11 @@ $(function () {
     ],
     language: { search: 'Rechercher :', lengthMenu: '_MENU_ lignes', info: '_TOTAL_ titres affichés', infoEmpty: 'Aucun titre',
       infoFiltered: '(sur _MAX_)', emptyTable: 'Analyse en cours, les premiers titres arrivent…',
-      zeroRecords: 'Aucun titre ne correspond aux filtres.', paginate: { previous: 'Précédent', next: 'Suivant' } }
+      zeroRecords: 'Aucun titre ne correspond aux filtres actifs.', paginate: { previous: 'Précédent', next: 'Suivant' } }
   });
-  
+
   window.Quant.table = table;
 
-  // ---------- filtres ----------
   const nombre = id => { const v = parseFloat($(id).val()); return Number.isNaN(v) ? null : v; };
   $.fn.dataTable.ext.search.push(function (settings, data, idx) {
     if (settings.nTable.id !== 'tbl') return true;
@@ -160,6 +153,7 @@ $(function () {
     }
     return true;
   });
+
   const MAP_FILTRES = {
     secteur: '#f-secteur', signal: '#f-signal', fav: '#f-fav', altman: '#f-altman',
     score: '#f-score', per: '#f-per', roic: '#f-roic', marge: '#f-marge', pio: '#f-pio', div: '#f-div'
@@ -208,7 +202,6 @@ $(function () {
     table.draw();
   });
 
-  // ---------- favoris ----------
   function basculerFavori(el) {
     const tk = el.dataset.ticker;
     const estActif = !favoris[tk];
@@ -218,7 +211,6 @@ $(function () {
     if (typeof table !== 'undefined' && table.draw) {
       table.draw(false);
     }
-    // Persistance SQLite
     fetch('/api/user/favorites', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -306,7 +298,6 @@ $(function () {
     else { row.child(detailHtml(r), 'detail-ligne').show(); $(this).addClass('ouvert'); }
   });
 
-  // ---------- chargement dynamique et robuste du graphique ----------
   function chargerGraphiqueIframe(container, tk, periode) {
     const frame = container.find('.graph-frame');
     const loading = container.find('.graph-loading');
@@ -319,9 +310,7 @@ $(function () {
     iframe.loading = 'lazy';
     iframe.src = `/graph/${encodeURIComponent(tk)}?periode=${encodeURIComponent(periode)}#${theme}`;
 
-    iframe.addEventListener('load', function () {
-      loading.hide();
-    });
+    iframe.addEventListener('load', function () { loading.hide(); });
     iframe.addEventListener('error', function () {
       loading.html('<span style="color:var(--rouge);">Impossible de charger le graphique pour cette période.</span>');
     });
@@ -329,7 +318,6 @@ $(function () {
     frame.append(iframe);
   }
 
-  // ---------- sélecteur de périodes du graphique ----------
   $('#tbl tbody').on('click', '.periode-btn', function (e) {
     e.stopPropagation();
     const btn = $(this);
@@ -359,75 +347,112 @@ $(function () {
     }
   });
 
-  // ---------- résumé et avancement ----------
   function majResume() {
     const L = Object.values(donnees);
     if (!L.length) return;
     const cand = L.filter(r => (r.signal || '').startsWith('ACHAT')).length;
     const marges = L.map(r => r.marge_secu).filter(v => !vide(v)).sort((a, b) => a - b);
     const med = marges.length ? marges[Math.floor(marges.length / 2)] : null;
+    const visibles = table.rows({ filter: 'applied' }).count();
+    const noteFiltre = visibles < L.length ? ` <strong>(${visibles} visibles avec vos filtres actuels)</strong>` : '';
     $('#resume').html(`<strong>${L.length}</strong> titres analysés${total ? ' sur ' + total : ''}, dont <strong>${cand}</strong> candidats à l'achat. `
-      + `Marge de sécurité médiane : <strong>${fmt(med, 1, ' %')}</strong>.`
+      + `Marge de sécurité médiane : <strong>${fmt(med, 1, ' %')}</strong>.${noteFiltre}`
       + (termine ? '' : ' <span class="discret">Classement provisoire tant que l\'analyse n\'est pas terminée.</span>'));
   }
 
   let minuterie = null;
-  const redessiner = () => { 
-    if (minuterie) return; 
-    minuterie = setTimeout(() => { 
-      minuterie = null; 
-      if (document.activeElement && $(document.activeElement).closest('.dataTables_filter').length) return; 
-      table.draw(false); 
-      majResume(); 
-    }, 250); 
+  const redessiner = () => {
+    if (minuterie) return;
+    minuterie = setTimeout(() => {
+      minuterie = null;
+      if (document.activeElement && $(document.activeElement).closest('.dataTables_filter').length) return;
+      table.draw(false);
+      majResume();
+    }, 250);
   };
 
-  // ---------- flux temps réel (SSE) ----------
-  console.log("Tentative de connexion SSE vers:", CFG.indice);
   const reglages = window.Reglages ? encodeURIComponent(JSON.stringify(window.Reglages.serveur())) : '';
   const url = `/stream?indice=${encodeURIComponent(CFG.indice)}&secteur=${encodeURIComponent(CFG.secteur)}&r=${reglages}`;
   const src = new EventSource(url);
-  
-  src.addEventListener('init', e => { 
-    console.log("Flux initié par le serveur !");
-    total = JSON.parse(e.data).total; 
-    $('#etat').text(`Analyse de ${total} titres…`); 
+
+  src.addEventListener('init', e => {
+    try {
+      total = JSON.parse(e.data).total;
+      $('#etat').text(`Analyse de ${total} titres…`);
+    } catch (err) { console.error('Erreur init SSE:', err); }
   });
-  
+
+  src.addEventListener('statut', e => {
+    try {
+      const msg = JSON.parse(e.data).msg;
+      if (msg) $('#etat').text(msg);
+    } catch (err) {}
+  });
+
   src.onmessage = e => {
-    const r = JSON.parse(e.data);
-    donnees[r.ticker] = r;
-    lignes[r.ticker] = table.row.add(r);
-    redessiner();
-  };
-  
-  src.addEventListener('progress', e => {
-    const fait = JSON.parse(e.data).done;
-    $('#barre').attr('value', total ? fait / total : 0);
-    $('#etat').text(`${fait} / ${total} titres traités`);
-  });
-  
-  src.addEventListener('scores', e => {
-    const sc = JSON.parse(e.data);
-    Object.keys(sc).forEach(tk => { if (donnees[tk]) { Object.assign(donnees[tk], sc[tk]); lignes[tk].data(donnees[tk]); } });
-    redessiner();
-  });
-  
-  src.addEventListener('close', () => {
-    console.log("Analyse terminée avec succès.");
-    termine = true; src.close();
-    $('#barre').attr('value', 1);
-    $('#etat').text('Analyse terminée.');
-    table.draw(false); majResume();
-  });
-  
-  src.onerror = (e) => {
-    console.error("Erreur de connexion au flux SSE (Le backend a coupé la connexion)", e);
-    if (termine) return;
-    src.close();
-    $('#etat').text('Connexion interrompue : rechargez la page ou redémarrez le serveur Python.');
+    try {
+      const r = JSON.parse(e.data);
+      if (!r || !r.ticker) return;
+      donnees[r.ticker] = r;
+      if (lignes[r.ticker]) {
+        lignes[r.ticker].data(r);
+      } else {
+        lignes[r.ticker] = table.row.add(r);
+      }
+      redessiner();
+    } catch (err) {
+      console.error('Erreur parsing ligne SSE:', err);
+    }
   };
 
-  // Exposé pour parametres.js (recalcul du classement, attente de la fin de l'analyse)
+  src.addEventListener('progress', e => {
+    try {
+      const p = JSON.parse(e.data);
+      const fait = p.done || 0;
+      const recus = p.recus !== undefined ? p.recus : Object.keys(donnees).length;
+      const errs = p.erreurs || 0;
+      $('#barre').attr('value', total ? fait / total : 0);
+      let txt = `${fait} / ${total} titres traités (${recus} reçus`;
+      if (errs > 0) txt += `, ${errs} limités/ignorés`;
+      txt += ')';
+      $('#etat').text(txt);
+    } catch (err) {}
+  });
+
+  src.addEventListener('scores', e => {
+    try {
+      const sc = JSON.parse(e.data);
+      Object.keys(sc).forEach(tk => {
+        if (donnees[tk]) {
+          Object.assign(donnees[tk], sc[tk]);
+          lignes[tk].data(donnees[tk]);
+        }
+      });
+      redessiner();
+    } catch (err) {
+      console.error('Erreur scores SSE:', err);
+    }
+  });
+
+  src.addEventListener('close', () => {
+    termine = true;
+    src.close();
+    $('#barre').attr('value', 1);
+    const nbRecus = Object.keys(donnees).length;
+    if (nbRecus === 0) {
+      $('#etat').html('<span style="color:var(--rouge);">Analyse terminée : 0 titre reçu (Yahoo Finance limite temporairement les requêtes sur le serveur). Patientez 1 à 2 minutes puis rechargez.</span>');
+    } else {
+      $('#etat').text(`Analyse terminée (${nbRecus} / ${total} titres chargés).`);
+    }
+    table.draw(false);
+    majResume();
+  });
+
+  src.onerror = () => {
+    if (termine) return;
+    src.close();
+    $('#etat').text('Connexion interrompue : rechargez la page.');
+  };
+
   Object.assign(window.Quant, { src, majResume });
 });

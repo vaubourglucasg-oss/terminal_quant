@@ -1,8 +1,3 @@
-"""Espace administrateur : statistiques du cache, journal, utilisateurs, purge du cache.
-
-Toutes les routes d'administration exigent le role admin via Depends(require_admin).
-L'endpoint POST /api/cron/refresh est dédié à Cloud Scheduler et sécurisé par X-Cron-Secret.
-"""
 import asyncio
 import hmac
 import os
@@ -18,17 +13,15 @@ from app.engine.auth import lister_utilisateurs
 from app.engine import journal
 from app.api.screener import REGIONS, obtenir_tickers_pour_indice
 from app.engine.fetcher import (vider_cache, lister_entrees_cache,
-                                supprimer_entree_cache, supprimer_cache_indice)
-from app.engine.scheduler import (job_mise_a_jour_4h, _executer_cycle_complet,
+                                supprimer_entree_cache, supprimer_cache_indice,
+                                db_cache_path)
+from app.engine.scheduler import (lancer_cycle_asynchrone,
                                   est_marche_ouvert_ou_recente_cloture)
 
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-db_cache_path = os.path.join(racine, "cache_bourse_v3.db")
 
 
 def stats_cache() -> dict:
@@ -45,7 +38,7 @@ def stats_cache() -> dict:
         conn.close()
     except Exception:
         pass
-    return {"fichier": os.path.basename(db_cache_path), "taille_mo": round(taille, 2), "tables": tables}
+    return {"fichier": db_cache_path, "taille_mo": round(taille, 2), "tables": tables}
 
 
 @router.get("/admin", response_class=HTMLResponse)
@@ -61,7 +54,7 @@ async def admin_page(request: Request, user: dict = Depends(require_admin)):
 
 @router.post("/admin/vider-cache", response_class=HTMLResponse)
 async def admin_vider_cache(request: Request, user: dict = Depends(require_admin)):
-    supprimes = await asyncio.to_thread(vider_cache)
+    await asyncio.to_thread(vider_cache)
     cache = await asyncio.to_thread(stats_cache)
     j = await asyncio.to_thread(journal.resume)
     users = await asyncio.to_thread(lister_utilisateurs)
@@ -70,12 +63,9 @@ async def admin_vider_cache(request: Request, user: dict = Depends(require_admin
         "user": user, "cache": cache, "journal": j, "utilisateurs": users,
         "entrees_cache": entrees, "regions": REGIONS, "resultat": None})
 
-# ---------------------------------------------------------------------------
-# API REST de contrôle fin du cache (Réservé à l'administrateur)
-# ---------------------------------------------------------------------------
+
 @router.get("/api/admin/cache/entries")
 async def api_admin_lister_cache(limite: int = 500, user: dict = Depends(require_admin)):
-    """Liste les entrées en cache en JSON."""
     entrees = await asyncio.to_thread(lister_entrees_cache, limite)
     stats = await asyncio.to_thread(stats_cache)
     return {"status": "ok", "total": len(entrees), "stats": stats, "entries": entrees}
@@ -83,14 +73,12 @@ async def api_admin_lister_cache(limite: int = 500, user: dict = Depends(require
 
 @router.delete("/api/admin/cache/entry")
 async def api_admin_supprimer_entree(ticker: str = Query(...), date: str = Query(None), user: dict = Depends(require_admin)):
-    """Supprime une entrée spécifique (ticker + date optionnelle)."""
     supprimes = await asyncio.to_thread(supprimer_entree_cache, ticker, date)
     return {"status": "ok", "deleted": supprimes, "ticker": ticker, "date": date}
 
 
 @router.delete("/api/admin/cache/index/{index_name}")
 async def api_admin_supprimer_index(index_name: str, user: dict = Depends(require_admin)):
-    """Supprime toutes les entrées associées à un indice entier (tag + tickers)."""
     tickers = obtenir_tickers_pour_indice(index_name)
     supprimes = await asyncio.to_thread(supprimer_cache_indice, index_name, tickers)
     return {"status": "ok", "deleted": supprimes, "indice": index_name}
@@ -98,35 +86,26 @@ async def api_admin_supprimer_index(index_name: str, user: dict = Depends(requir
 
 @router.delete("/api/admin/cache/all")
 async def api_admin_vider_tout_cache(user: dict = Depends(require_admin)):
-    """Vide l'intégralité du cache boursier et la mémoire TTL."""
     supprimes = await asyncio.to_thread(vider_cache)
     return {"status": "ok", "deleted": supprimes}
 
 
-# ---------------------------------------------------------------------------
-# Point d'entrée de réveil automatique (Cloud Scheduler)
-# ---------------------------------------------------------------------------
 @router.post("/api/cron/refresh")
 async def api_cron_refresh(request: Request):
-    """Point d'entrée sécurisé pour Google Cloud Scheduler (réveil automatique toutes les 4 heures).
-    
-    Exécute la mise à jour complète de manière synchrone pendant la requête HTTP,
-    ce qui garantit que Cloud Run (avec min-instances=0) maintient le CPU actif
-    jusqu'à la fin de la tâche.
-    """
+    """Point d'entrée sécurisé pour Google Cloud Scheduler (réponse 202 immédiate, exécution en arrière-plan)."""
     secret_attendu = os.environ.get("CRON_SECRET", "").strip()
     secret_fourni = request.headers.get("X-Cron-Secret", "").strip()
 
     if not secret_attendu or not hmac.compare_digest(secret_fourni, secret_attendu):
         raise HTTPException(status_code=403, detail="Secret cron invalide")
 
-    ouvert, msg_marche = est_marche_ouvert_ou_recente_cloture()
-    # Exécution synchrone dans un thread pour tenir le cycle pendant l'appel HTTP Cloud Run
-    await asyncio.to_thread(job_mise_a_jour_4h)
-    await asyncio.to_thread(_executer_cycle_complet, 3.5)
-    return {
-        "status": "ok",
-        "message": "Mise à jour complète terminée",
-        "marche": msg_marche
-    }
-
+    _, msg_marche = est_marche_ouvert_ou_recente_cloture()
+    lance = lancer_cycle_asynchrone(max_age_check=3.5)
+    return JSONResponse(
+        status_code=202 if lance else 200,
+        content={
+            "status": "started" if lance else "already_running",
+            "message": "Mise à jour complète lancée en arrière-plan" if lance else "Une mise à jour est déjà en cours",
+            "marche": msg_marche
+        }
+    )

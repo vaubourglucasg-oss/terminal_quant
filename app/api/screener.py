@@ -24,16 +24,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 SANS_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
-DELAI_MACRO, DELAI_RF, DELAI_BENCH, DELAI_LISTE = 25, 10, 15, 20     # secondes : un Yahoo lent ne doit pas bloquer la page
-CONCURRENCE = 6                      # téléchargements simultanés (au-delà, Yahoo limite le débit)
+DELAI_MACRO, DELAI_RF, DELAI_BENCH, DELAI_LISTE = 25, 10, 15, 20
+CONCURRENCE = 3                      # 3 workers max sur Cloud Run pour éviter HTTP 429 Yahoo Finance
 
 
 def lire_reglages(brut):
-    """Réglages envoyés par l'interface (JSON) -> valeurs bornées, utilisables telles quelles côté serveur."""
     brut = brut if isinstance(brut, dict) else {}
     return {"score": normaliser_reglages(brut), "hyp": normaliser_hypotheses(brut.get("hyp")),
             "exclure_fin": brut.get("exclure_fin") is True,
-            "concurrence": int(_borne(brut.get("concurrence"), 1, 10, CONCURRENCE))}
+            "concurrence": int(_borne(brut.get("concurrence"), 1, 6, CONCURRENCE))}
 
 
 RE_TICKER = re.compile(r"^[A-Za-z0-9.\-&^=]{1,20}$")
@@ -70,6 +69,7 @@ TICKERS_PAR_INDICE = {
     "Bovespa": ["ABEV3.SA", "ALOS3.SA", "AZUL4.SA", "B3SA3.SA", "BBAS3.SA", "BBDC3.SA", "BBDC4.SA", "BBSE3.SA", "BEEF3.SA", "BPAC11.SA", "BRAP4.SA", "BRFS3.SA", "BRKM5.SA", "CCRO3.SA", "CIEL3.SA", "CMIG4.SA", "CMIN3.SA", "COGN3.SA", "CPFE3.SA", "CPLE6.SA", "CRFB3.SA", "CSAN3.SA", "CSNA3.SA", "CVCB3.SA", "CYRE3.SA", "DXCO3.SA", "EGIE3.SA", "ELET3.SA", "ELET6.SA", "EMBR3.SA", "ENGI11.SA", "EQTL3.SA", "EZTC3.SA", "FLRY3.SA", "GGBR4.SA", "GOAU4.SA", "GOLL4.SA", "HAPV3.SA", "HYPE3.SA", "IGTI11.SA", "IRBR3.SA", "ITSA4.SA", "ITUB4.SA", "JBSS3.SA", "KLBN11.SA", "LREN3.SA", "LWSA3.SA", "MGLU3.SA", "MRFG3.SA", "MRVE3.SA", "MULT3.SA", "NTCO3.SA", "PCAR3.SA", "PETR3.SA", "PETR4.SA", "PETZ3.SA", "PRIO3.SA", "RADL3.SA", "RAIZ4.SA", "RDOR3.SA", "RENT3.SA", "RECV3.SA", "SANB11.SA", "SBSP3.SA", "SLCE3.SA", "SMTO3.SA", "SOMA3.SA", "SUZB3.SA", "TAEE11.SA", "TIMS3.SA", "TOTS3.SA", "UGPA3.SA", "USIM5.SA", "VALE3.SA", "VBBR3.SA", "VIIA3.SA", "VIVT3.SA", "WEGE3.SA", "YDUQ3.SA"]
 }
 
+
 def obtenir_tickers_pour_indice(indice: str):
     if indice in ("SP 500", "S&P 500"):
         try:
@@ -84,11 +84,6 @@ def obtenir_tickers_pour_indice(indice: str):
     return TICKERS_PAR_INDICE.get(indice, ["MC.PA", "TTE.PA", "AI.PA"])
 
 
-# =========================================================================
-# CONTEXTE MACRO
-# Les seuils portent sur le z-score à 1 mois (rendement / volatilité attendue) et, pour le VIX et les
-# taux, sur le NIVEAU. Ce sont des repères narratifs (aucun backtest) : ils n'entrent PAS dans le score.
-# =========================================================================
 def _z(m, nom):
     return (m.get(nom) or {}).get("z") or 0.0
 
@@ -103,7 +98,7 @@ def _reco(badge, style, conseil):
 
 
 def analyser_recommandations_tous_indices(m):
-    vix, tnx = _niveau(m, "Volatilité VIX", 18.0), _niveau(m, "Taux 10 Ans", 4.2)
+    vix = _niveau(m, "Volatilité VIX", 18.0)
     z_tnx, z_usd, z_cu = _z(m, "Taux 10 Ans"), _z(m, "Index Dollar"), _z(m, "Cuivre")
     z_oil, z_or, z_semi = _z(m, "Pétrole WTI"), _z(m, "Or"), _z(m, "Semi-conducteurs")
     mat = max(z_oil, z_or)
@@ -177,9 +172,6 @@ async def _contexte():
     return macro, recoms, regions, tops
 
 
-# =========================================================================
-# ROUTES
-# =========================================================================
 @router.get("/", response_class=HTMLResponse)
 async def landing_page(request: Request):
     user = await get_current_user(request)
@@ -219,10 +211,9 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
         reg = lire_reglages({})
 
     def evt(nom, payload):
-        return f"event: {nom}\ndata: {json.dumps(json_safe(payload))}\n\n"
+        return f"event: {nom}\ndata: {json.dumps(json_safe(payload), allow_nan=False)}\n\n"
 
     async def avec_delai(fonction, delai, defaut, *args):
-        """Exécute `fonction` dans un thread ; au-delà de `delai` secondes, on continue avec `defaut`."""
         try:
             return await asyncio.wait_for(asyncio.to_thread(fonction, *args), delai)
         except Exception as e:
@@ -230,7 +221,6 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
             return defaut
 
     async def generer():
-        # la réponse part tout de suite : le navigateur voit l'état au lieu d'attendre dans le vide
         yield evt("statut", {"msg": "Chargement du contexte de marché…"})
         macro, rf, bench, tickers = await asyncio.gather(
             avec_delai(analyser_tendances_macro, DELAI_MACRO, {}),
@@ -244,7 +234,7 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
             return
         ETAT_ERREURS.update(n=0, derniere="")
         if reg["hyp"]["rf"] is not None:
-            rf = reg["hyp"]["rf"]                      # taux sans risque saisi à la main
+            rf = reg["hyp"]["rf"]
         sem = asyncio.Semaphore(reg["concurrence"])
 
         def scorer(lignes_):
@@ -268,13 +258,12 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
                 faits += 1
                 if res:
                     lignes.append(res)
-                    yield f"data: {json.dumps(json_safe(res))}\n\n"
+                    yield f"data: {json.dumps(json_safe(res), allow_nan=False)}\n\n"
                 yield evt("progress", {"done": faits, "recus": len(lignes), "erreurs": ETAT_ERREURS["n"],
                                        "derniere": ETAT_ERREURS["derniere"]})
                 if res and (len(lignes) == 10 or len(lignes) % 20 == 0):
-                    yield evt("scores", scorer(lignes))      # classement provisoire
-            yield evt("scores", scorer(lignes))                # classement définitif
-            # journal des signaux : enregistre l'instantané des scans standard (ne lève jamais d'exception)
+                    yield evt("scores", scorer(lignes))
+            yield evt("scores", scorer(lignes))
             ok, raison = await asyncio.to_thread(journaliser_scan, indice, lignes, len(tickers), secteurs_cibles,
                                                  cle_hypotheses(reg["hyp"]) == "")
             print(f"journal des signaux [{indice}] : {'enregistré' if ok else 'ignoré'} ({raison})")
@@ -289,8 +278,6 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
 
 @router.post("/api/scores")
 async def recalculer_scores(request: Request):
-    """Recalcule le classement à partir des lignes déjà affichées et des réglages du moment (pondérations,
-    seuils...), sans relancer l'analyse. Corps : {"lignes": [...], "reglages": {...}}."""
     try:
         corps = await request.json()
     except ValueError:
@@ -305,8 +292,6 @@ async def recalculer_scores(request: Request):
 
 @router.post("/api/cache/vider")
 async def vider_le_cache(user: dict = Depends(require_admin)):
-    """Efface les analyses en cache et les données macro en mémoire (utile après une série d'erreurs Yahoo).
-    Réservé aux administrateurs."""
     return {"supprimes": await asyncio.to_thread(vider_cache)}
 
 
@@ -319,8 +304,6 @@ async def detail_actualites(ticker: str):
 
 @router.get("/api/titre/{ticker}")
 async def titre_isole(ticker: str):
-    """Une action quelconque (hors de l'indice en cours), pour le comparateur. Mêmes métriques brutes que le scan,
-    sans notation relative : le score est un classement dans un univers, qu'un titre isolé n'a pas."""
     if not RE_TICKER.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker invalide")
     macro, rf = await asyncio.gather(asyncio.to_thread(analyser_tendances_macro),
