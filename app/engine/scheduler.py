@@ -34,7 +34,7 @@ PLAGES_MARCHES = {
 }
 
 TOUS_LES_INDICES = [nom for groupe in REGIONS.values() for nom in groupe]
-DELAI_ENTRE_INDICES_MIN = 0.25  # 15 secondes entre chaque indice
+DELAI_ENTRE_INDICES_SEC = 5
 
 _scheduler = None
 _stop_event = threading.Event()
@@ -52,14 +52,16 @@ def _maj_etat_refresh(**kwargs):
         "debut": None,
         "fin": None,
         "derniere_bascule": None,
+        "heartbeat": 0,
     }
     etat.update(kwargs)
+    etat["heartbeat"] = time.time()
     ecrire_meta("etat_refresh", etat)
     return etat
 
 
 def obtenir_etat_refresh() -> dict:
-    return lire_meta("etat_refresh") or {
+    etat = lire_meta("etat_refresh") or {
         "en_cours": False,
         "mode": "",
         "cible": "",
@@ -70,7 +72,12 @@ def obtenir_etat_refresh() -> dict:
         "debut": None,
         "fin": None,
         "derniere_bascule": None,
+        "heartbeat": 0,
     }
+    # Si un conteneur Cloud Run a été coupé sans finir, réinitialise l'affichage après 4 min d'inactivité
+    if etat.get("en_cours") and (time.time() - float(etat.get("heartbeat") or 0)) > 240:
+        etat["en_cours"] = False
+    return etat
 
 
 def est_marche_ouvert_ou_recente_cloture(dt: datetime | None = None) -> tuple[bool, str]:
@@ -107,7 +114,18 @@ def init_table_verrou():
         logger.error(f"Erreur init table scheduler_locks : {e}")
 
 
-def acquerir_verrou(job_id: str, duree_secondes: int = 7200) -> bool:
+def prolonger_verrou(job_id: str, duree_secondes: int = 300):
+    try:
+        conn = _conn_cache()
+        conn.execute("UPDATE scheduler_locks SET expire_le = ? WHERE job_id = ?",
+                     (time.time() + duree_secondes, job_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def acquerir_verrou(job_id: str, duree_secondes: int = 300) -> bool:
     init_table_verrou()
     maintenant = time.time()
     expire = maintenant + duree_secondes
@@ -132,17 +150,18 @@ def acquerir_verrou(job_id: str, duree_secondes: int = 7200) -> bool:
 def liberer_verrou(job_id: str):
     try:
         conn = _conn_cache()
-        conn.execute("DELETE FROM scheduler_locks WHERE job_id = ? AND worker_pid = ?", (job_id, os.getpid()))
+        conn.execute("DELETE FROM scheduler_locks WHERE job_id = ?", (job_id,))
         conn.commit()
         conn.close()
     except Exception as e:
         logger.warning(f"Erreur libération verrou {job_id} : {e}")
 
 
-def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp: dict, compteur: dict):
+def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp: dict, compteur: dict) -> int:
     bench = obtenir_benchmark(nom_indice)
     tickers = list(dict.fromkeys(obtenir_tickers_pour_indice(nom_indice)))
     logger.info(f"[{nom_indice}] Chargement vers staging de {len(tickers)} titres.")
+    reussis_indice = 0
 
     def worker_action(tk):
         if _stop_event.is_set():
@@ -155,10 +174,10 @@ def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp
         except Exception as e:
             logger.warning(f"[{nom_indice}] Erreur {tk}: {e}")
             res = None
-        time.sleep(random.uniform(0.7, 1.3))
+        time.sleep(random.uniform(0.35, 0.75))
         return res
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futurs = [executor.submit(worker_action, tk) for tk in tickers]
         for f in as_completed(futurs):
             if _stop_event.is_set():
@@ -171,9 +190,11 @@ def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp
             compteur["faits"] += 1
             if res is not None:
                 compteur["reussis"] += 1
+                reussis_indice += 1
             else:
                 compteur["echecs"] += 1
-            if compteur["faits"] % 15 == 0 or compteur["faits"] == compteur["total"]:
+            if compteur["faits"] % 10 == 0 or compteur["faits"] == compteur["total"]:
+                prolonger_verrou("cycle_complet", 300)
                 _maj_etat_refresh(
                     cible=nom_indice,
                     faits=compteur["faits"],
@@ -181,13 +202,15 @@ def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp
                     reussis=compteur["reussis"],
                     echecs=compteur["echecs"],
                 )
+    return reussis_indice
 
 
-def _executer_liste_indices_atomique(indices: list[str], mode: str):
-    """Charge tous les indices demandés dans staging, puis bascule atomiquement vers cache_actions une fois tout terminé."""
+def executer_liste_indices_atomique(indices: list[str], mode: str) -> int:
+    """Charge chaque indice en staging puis le bascule atomiquement dès qu'il est complet."""
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     tous_tickers = [tk for idx in indices for tk in obtenir_tickers_pour_indice(idx)]
     compteur = {"faits": 0, "total": len(tous_tickers), "reussis": 0, "echecs": 0}
+    total_bascules = 0
 
     _maj_etat_refresh(
         en_cours=True, mode=mode, cible=indices[0] if indices else "",
@@ -196,7 +219,6 @@ def _executer_liste_indices_atomique(indices: list[str], mode: str):
     )
 
     try:
-        vider_staging(indices if len(indices) < len(TOUS_LES_INDICES) else None)
         rf = obtenir_taux_sans_risque(forcer_yahoo=True)
         macro = analyser_tendances_macro(forcer_yahoo=True)
         hyp_defaut = normaliser_hypotheses(None)
@@ -207,41 +229,44 @@ def _executer_liste_indices_atomique(indices: list[str], mode: str):
                 break
 
             if i > 0:
-                pause_sec = int(DELAI_ENTRE_INDICES_MIN * 60)
-                for _ in range(max(1, pause_sec // 5)):
-                    if _stop_event.is_set():
-                        return
-                    time.sleep(5)
+                time.sleep(DELAI_ENTRE_INDICES_SEC)
 
+            prolonger_verrou("cycle_complet", 300)
             _maj_etat_refresh(cible=nom_indice)
             try:
+                vider_staging([nom_indice])
                 _charger_un_indice_vers_staging(nom_indice, rf, macro, hyp_defaut, compteur)
+                # Bascule atomique immédiate pour cet indice dès que tous ses titres sont prêts
+                nb = valider_staging_vers_cache([nom_indice])
+                total_bascules += nb
+                bascule_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                logger.info(f"[{mode}] {nom_indice} basculé atomiquement ({nb} titres).")
+                _maj_etat_refresh(derniere_bascule=f"{bascule_iso} ({nom_indice} : {nb} titres)")
             except Exception as e:
                 logger.error(f"[{mode}] Erreur sur {nom_indice} : {e}")
 
-        # Bascule atomique uniquement une fois le chargement complet achevé
-        nb_bascules = valider_staging_vers_cache(indices if len(indices) < len(TOUS_LES_INDICES) else None)
         fin_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        logger.info(f"[{mode}] Terminé : {nb_bascules} entrées basculées atomiquement vers le cache actif.")
         _maj_etat_refresh(
             en_cours=False, faits=compteur["faits"], total=compteur["total"],
             reussis=compteur["reussis"], echecs=compteur["echecs"],
-            fin=fin_iso, derniere_bascule=f"{fin_iso} ({nb_bascules} titres)"
+            fin=fin_iso, derniere_bascule=f"{fin_iso} (Total : {total_bascules} titres)"
         )
+        return total_bascules
     except Exception as e:
         logger.error(f"[{mode}] Échec global : {e}")
         _maj_etat_refresh(en_cours=False, fin=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        return total_bascules
 
 
 def lancer_cycle_asynchrone(mode: str = "Scheduler") -> bool:
-    """Lance la mise à jour complète des 20 indices en arrière-plan (staging -> bascule atomique)."""
-    if not acquerir_verrou("cycle_complet", duree_secondes=7200):
+    """Lance la mise à jour complète des 20 indices en arrière-plan."""
+    if not acquerir_verrou("cycle_complet", duree_secondes=300):
         logger.info("[Scheduler] Une mise à jour est déjà en cours, appel ignoré.")
         return False
 
     def runner():
         try:
-            _executer_liste_indices_atomique(TOUS_LES_INDICES, mode=mode)
+            executer_liste_indices_atomique(TOUS_LES_INDICES, mode=mode)
         finally:
             liberer_verrou("cycle_complet")
 
@@ -251,16 +276,16 @@ def lancer_cycle_asynchrone(mode: str = "Scheduler") -> bool:
 
 
 def lancer_indice_asynchrone(nom_indice: str) -> bool:
-    """Lance le rechargement manuel d'un seul indice depuis l'interface Admin (staging -> bascule atomique)."""
+    """Lance le rechargement manuel d'un seul indice depuis l'interface Admin."""
     if nom_indice not in TOUS_LES_INDICES:
         return False
-    if not acquerir_verrou("cycle_complet", duree_secondes=3600):
+    if not acquerir_verrou("cycle_complet", duree_secondes=300):
         logger.info(f"[Admin] Impossible de lancer {nom_indice} : un chargement est déjà en cours.")
         return False
 
     def runner():
         try:
-            _executer_liste_indices_atomique([nom_indice], mode=f"Admin ({nom_indice})")
+            executer_liste_indices_atomique([nom_indice], mode=f"Admin ({nom_indice})")
         finally:
             liberer_verrou("cycle_complet")
 
@@ -294,7 +319,7 @@ def demarrer_scheduler() -> BackgroundScheduler:
     )
 
     _scheduler.start()
-    logger.info("Planificateur APScheduler démarré (cycle atomique toutes les 5h pendant ouverture marchés).")
+    logger.info("Planificateur APScheduler démarré (cycle atomique par indice toutes les 5h).")
     return _scheduler
 
 

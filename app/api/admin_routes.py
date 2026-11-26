@@ -18,8 +18,9 @@ from app.engine.fetcher import (vider_cache, lister_entrees_cache,
                                 analyser_tendances_macro, obtenir_taux_sans_risque,
                                 normaliser_hypotheses)
 from app.engine.scheduler import (lancer_cycle_asynchrone, lancer_indice_asynchrone,
-                                  obtenir_etat_refresh, est_marche_ouvert_ou_recente_cloture)
-
+                                  obtenir_etat_refresh, est_marche_ouvert_ou_recente_cloture,
+                                  executer_liste_indices_atomique, TOUS_LES_INDICES,
+                                  acquerir_verrou, liberer_verrou)
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
@@ -148,7 +149,7 @@ async def api_admin_vider_tout_cache(user: dict = Depends(require_admin)):
 
 @router.post("/api/cron/refresh")
 async def api_cron_refresh(request: Request):
-    """Point d'entrée sécurisé pour Google Cloud Scheduler (réponse 202 immédiate, bascule atomique en fin de cycle)."""
+    """Point d'entrée sécurisé pour Google Cloud Scheduler (exécute le cycle avec CPU actif)."""
     secret_attendu = os.environ.get("CRON_SECRET", "").strip()
     secret_fourni = request.headers.get("X-Cron-Secret", "").strip()
 
@@ -156,12 +157,22 @@ async def api_cron_refresh(request: Request):
         raise HTTPException(status_code=403, detail="Secret cron invalide")
 
     _, msg_marche = est_marche_ouvert_ou_recente_cloture()
-    lance = lancer_cycle_asynchrone(mode="Cloud Scheduler")
+    if not acquerir_verrou("cycle_complet", duree_secondes=300):
+        return JSONResponse(
+            status_code=200,
+            content={"status": "already_running", "message": "Une mise à jour est déjà en cours", "marche": msg_marche}
+        )
+
+    try:
+        total_bascules = await asyncio.to_thread(executer_liste_indices_atomique, TOUS_LES_INDICES, "Cloud Scheduler")
+    finally:
+        liberer_verrou("cycle_complet")
+
     return JSONResponse(
-        status_code=202 if lance else 200,
+        status_code=200,
         content={
-            "status": "started" if lance else "already_running",
-            "message": "Mise à jour complète lancée en arrière-plan (bascule atomique en fin de cycle)" if lance else "Une mise à jour est déjà en cours",
+            "status": "completed",
+            "message": f"Mise à jour terminée ({total_bascules} titres basculés)",
             "marche": msg_marche
         }
     )

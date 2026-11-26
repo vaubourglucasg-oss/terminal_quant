@@ -2,6 +2,7 @@ import os
 import math
 import json
 import time
+import shutil
 import random
 import sqlite3
 import threading
@@ -17,7 +18,11 @@ from app.engine import math_models as mm
 
 racine = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.environ.get("DATA_DIR", "").strip() or racine
-db_cache_path = os.path.join(DATA_DIR, "cache_bourse_v3.db")
+EST_FUSE = DATA_DIR.startswith("/mnt/") or DATA_DIR.startswith("/gcs/")
+
+# Sur Cloud Run + GCS FUSE, SQLite tourne sur /tmp (RAM) et sauvegarde un snapshot propre sur /mnt/data
+PERSISTENT_DB_PATH = os.path.join(DATA_DIR, "cache_bourse_v3.db") if EST_FUSE else None
+db_cache_path = "/tmp/cache_bourse_v3.db" if EST_FUSE else os.path.join(DATA_DIR, "cache_bourse_v3.db")
 VERSION_SCHEMA = 3
 
 # --------------------------------------------------------------------------- #
@@ -49,7 +54,6 @@ def cle_hypotheses(hyp):
     return "|" + hashlib.md5(json.dumps(arrondi(hyp), sort_keys=True).encode()).hexdigest()[:8]
 
 
-# Taux souverains 10 ans par devise (USD utilise ^TNX en temps réel via rf_us)
 RF_LOCAL = {
     "EUR": 0.028, "GBP": 0.043, "CHF": 0.005, "JPY": 0.010,
     "CAD": 0.032, "AUD": 0.043, "SEK": 0.022, "HKD": 0.038,
@@ -77,9 +81,13 @@ LIENS_MACRO = [("Gold", "Or"), ("Uranium", "Uranium"), ("Oil", "Pétrole WTI"), 
                ("Solar", "Solaire"), ("Biotechnology", "Biotech"), ("Banks", "Banque")]
 
 # --------------------------------------------------------------------------- #
-# Utilitaires
+# Utilitaires & Synchronisation GCS
 # --------------------------------------------------------------------------- #
 _verrou = threading.Lock()
+_verrou_sync = threading.Lock()
+_dernier_export_ts = 0.0
+_dernier_import_mtime = 0.0
+_dernier_check_import_ts = 0.0
 _ttl = {}
 ETAT_ERREURS = {"n": 0, "derniere": ""}
 
@@ -124,8 +132,75 @@ def json_safe(o):
     return o
 
 
+def _importer_depuis_gcs(forcer: bool = False):
+    """Copie séquentiellement la base persistante (/mnt/data) vers /tmp au démarrage ou si mise à jour externe."""
+    global _dernier_import_mtime, _dernier_check_import_ts
+    if not PERSISTENT_DB_PATH:
+        return
+    now = time.time()
+    if not forcer and (now - _dernier_check_import_ts) < 20.0:
+        return
+    _dernier_check_import_ts = now
+
+    with _verrou_sync:
+        try:
+            if not os.path.exists(PERSISTENT_DB_PATH):
+                return
+            mtime = os.path.getmtime(PERSISTENT_DB_PATH)
+            if not forcer and os.path.exists(db_cache_path) and mtime <= _dernier_import_mtime:
+                return
+            tmp_in = db_cache_path + ".incoming"
+            shutil.copyfile(PERSISTENT_DB_PATH, tmp_in)
+            conn_test = sqlite3.connect(tmp_in, timeout=10)
+            ok = conn_test.execute("PRAGMA integrity_check").fetchone()[0]
+            conn_test.close()
+            if ok == "ok":
+                os.replace(tmp_in, db_cache_path)
+                _dernier_import_mtime = mtime
+            elif os.path.exists(tmp_in):
+                os.remove(tmp_in)
+        except Exception as e:
+            print(f"Info import cache persistant : {e}")
+
+
+def _exporter_vers_gcs(forcer: bool = False):
+    """Exporte un snapshot SQLite cohérent et séquentiel vers /mnt/data (max 1 fois toutes les 5s)."""
+    global _dernier_export_ts, _dernier_import_mtime
+    if not PERSISTENT_DB_PATH or not os.path.exists(db_cache_path):
+        return
+    with _verrou_sync:
+        now = time.time()
+        if not forcer and (now - _dernier_export_ts) < 5.0:
+            return
+        snap_local = db_cache_path + ".snap"
+        try:
+            os.makedirs(os.path.dirname(PERSISTENT_DB_PATH), exist_ok=True)
+            if os.path.exists(snap_local):
+                os.remove(snap_local)
+            src = sqlite3.connect(db_cache_path, timeout=20)
+            dst = sqlite3.connect(snap_local, timeout=20)
+            src.backup(dst)
+            dst.close()
+            src.close()
+
+            # Écriture séquentielle en un seul flux sur GCS FUSE (zéro fichier .db-journal, zéro offset aléatoire)
+            tmp_gcs = PERSISTENT_DB_PATH + f".tmp_{os.getpid()}"
+            shutil.copyfile(snap_local, tmp_gcs)
+            os.replace(tmp_gcs, PERSISTENT_DB_PATH)
+            _dernier_export_ts = time.time()
+            _dernier_import_mtime = os.path.getmtime(PERSISTENT_DB_PATH)
+        except Exception as e:
+            print(f"Erreur export snapshot vers {PERSISTENT_DB_PATH} : {e}")
+        finally:
+            if os.path.exists(snap_local):
+                try:
+                    os.remove(snap_local)
+                except Exception:
+                    pass
+
+
 # --------------------------------------------------------------------------- #
-# Cache SQLite (table active + table staging + métadonnées)
+# Cache SQLite local rapide (/tmp) + persistance GCS
 # --------------------------------------------------------------------------- #
 def _conn_cache():
     dossier = os.path.dirname(db_cache_path)
@@ -133,14 +208,14 @@ def _conn_cache():
         os.makedirs(dossier, exist_ok=True)
     conn = sqlite3.connect(db_cache_path, timeout=30)
     conn.row_factory = sqlite3.Row
-    est_fuse = db_cache_path.startswith("/mnt/") or db_cache_path.startswith("/gcs/")
-    conn.execute(f"PRAGMA journal_mode={'DELETE' if est_fuse else 'WAL'}")
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
 def init_cache_db():
+    _importer_depuis_gcs(forcer=True)
     conn = _conn_cache()
     try:
         for table in ("cache_actions", "cache_actions_staging"):
@@ -207,6 +282,7 @@ def ecrire_meta(cle: str, valeur):
 
 def charger_du_cache(ticker, date_str=None, max_age_heures: float = 4.0, autoriser_perime: bool = True):
     """Lit uniquement depuis la table principale cache_actions."""
+    _importer_depuis_gcs(forcer=False)
     try:
         conn = _conn_cache()
         try:
@@ -237,7 +313,8 @@ def charger_du_cache(ticker, date_str=None, max_age_heures: float = 4.0, autoris
 
 
 def charger_lot_du_cache(tickers: list[str]) -> dict[str, dict]:
-    """Charge en une seule requête SQLite la dernière version valide de chaque ticker pour les utilisateurs."""
+    """Charge en une seule requête SQLite la dernière version valide de chaque ticker."""
+    _importer_depuis_gcs(forcer=False)
     clean = list({t.strip() for t in tickers if t})
     if not clean:
         return {}
@@ -280,6 +357,8 @@ def sauvegarder_dans_cache(ticker, date_str, data, indice=None, categorie="actio
             conn.commit()
         finally:
             conn.close()
+        if table == "cache_actions":
+            _exporter_vers_gcs(forcer=False)
     except Exception as e:
         print(f"Cache ({table}) non écrit pour {ticker} : {e}")
 
@@ -298,8 +377,9 @@ def vider_staging(indices_cibles: list[str] | None = None):
 
 
 def valider_staging_vers_cache(indices_cibles: list[str] | None = None) -> int:
-    """Bascule atomiquement les données prêtes de cache_actions_staging vers cache_actions."""
+    """Bascule atomiquement staging -> cache_actions puis persiste un snapshot unique sur GCS."""
     conn = _conn_cache()
+    nb_bascules = 0
     try:
         conn.execute("BEGIN IMMEDIATE")
         if indices_cibles:
@@ -335,7 +415,7 @@ def valider_staging_vers_cache(indices_cibles: list[str] | None = None) -> int:
             conn.execute("DELETE FROM cache_actions_staging")
 
         conn.commit()
-        return len(rows)
+        nb_bascules = len(rows)
     except Exception as e:
         try:
             conn.execute("ROLLBACK")
@@ -346,8 +426,13 @@ def valider_staging_vers_cache(indices_cibles: list[str] | None = None) -> int:
     finally:
         conn.close()
 
+    if nb_bascules > 0:
+        _exporter_vers_gcs(forcer=True)
+    return nb_bascules
+
 
 def lister_entrees_cache(limite: int = 500) -> list[dict]:
+    _importer_depuis_gcs(forcer=False)
     conn = _conn_cache()
     try:
         rows = conn.execute("""
@@ -372,6 +457,8 @@ def supprimer_entree_cache(ticker: str, date_str: str = None) -> int:
         n = cur.rowcount
     finally:
         conn.close()
+    if n > 0:
+        _exporter_vers_gcs(forcer=True)
     return n
 
 
@@ -389,6 +476,8 @@ def supprimer_cache_indice(indice: str, tickers: list[str] = None) -> int:
         conn.commit()
     finally:
         conn.close()
+    if n > 0:
+        _exporter_vers_gcs(forcer=True)
     return n
 
 
@@ -406,6 +495,7 @@ def vider_cache():
         print(f"Cache non vidé : {e}")
     with _verrou:
         _ttl.clear()
+    _exporter_vers_gcs(forcer=True)
     return n
 
 
@@ -434,7 +524,6 @@ def _macro_un(nom, symbole):
 
 
 def analyser_tendances_macro(forcer_yahoo: bool = False):
-    """Lit la macro en cache SQLite pour les utilisateurs ; interroge Yahoo uniquement si forcer_yahoo=True."""
     if not forcer_yahoo:
         en_cache = lire_meta("macro")
         if isinstance(en_cache, dict) and en_cache:
@@ -505,7 +594,7 @@ def etiquette_macro(industrie, macro):
 
 
 # --------------------------------------------------------------------------- #
-# Analyse d'une action depuis Yahoo Finance (appelée uniquement par Scheduler / Admin)
+# Analyse d'une action depuis Yahoo Finance (Scheduler / Admin uniquement)
 # --------------------------------------------------------------------------- #
 def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=None, bench=None, hyp=None,
                           indice=None, table_cible="cache_actions_staging"):
@@ -526,7 +615,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
                 if tentative == 2:
                     _enregistrer_erreur(f"{ticker_symbol}: {type(e).__name__}")
                     return None
-            time.sleep(0.6 * (tentative + 1) + random.uniform(0.1, 0.4))
+            time.sleep(0.5 * (tentative + 1) + random.uniform(0.1, 0.3))
 
         secteur = info.get("sector") or "N/A"
         if secteurs_cibles and secteur != "N/A" and secteur not in secteurs_cibles:
