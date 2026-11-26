@@ -1,57 +1,47 @@
 /* dashboard.js - Tableau de bord complet */
 window.Quant = window.Quant || {};
 
-function formaterDateLocale(row) {
-  if (!row) return "—";
-  let d = null;
-
-  if (row.last_updated) {
-    const parsed = new Date(row.last_updated);
-    if (!Number.isNaN(parsed.getTime())) d = parsed;
-  }
-
-  // Compatibilité avec les anciennes entrées sans last_updated ("16:53 UTC" ou "26/11 16:53 UTC")
-  if (!d && typeof row.maj === "string") {
-    const m = row.maj.trim().match(/^(?:(\d{2})\/(\d{2})(?:\/(\d{4}))?\s+)?(\d{2}):(\d{2})\s*UTC$/i);
-    if (m) {
-      const now = new Date();
-      const annee = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
-      const mois = m[2] ? parseInt(m[2], 10) - 1 : now.getUTCMonth();
-      const jour = m[1] ? parseInt(m[1], 10) : now.getUTCDate();
-      d = new Date(Date.UTC(annee, mois, jour, parseInt(m[4], 10), parseInt(m[5], 10)));
-    } else {
-      return row.maj || "—";
+function extraireDateMaj(row) {
+    if (!row) return null;
+    if (row.last_updated) {
+      const parsed = new Date(row.last_updated);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
     }
+    if (typeof row.maj === 'string') {
+      const m = row.maj.trim().match(/^(?:(\d{2})\/(\d{2})(?:\/(\d{4}))?\s+)?(\d{2}):(\d{2})\s*UTC$/i);
+      if (m) {
+        const now = new Date();
+        const annee = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
+        const mois = m[2] ? parseInt(m[2], 10) - 1 : now.getUTCMonth();
+        const jour = m[1] ? parseInt(m[1], 10) : now.getUTCDate();
+        const d = new Date(Date.UTC(annee, mois, jour, parseInt(m[4], 10), parseInt(m[5], 10)));
+        if (!Number.isNaN(d.getTime())) return d;
+      }
+    }
+    return null;
   }
 
-  if (!d || Number.isNaN(d.getTime())) return row.maj || "—";
+  function formaterDateLocale(row) {
+    const d = extraireDateMaj(row);
+    if (!d) return (row && row.maj) ? row.maj : '—';
+    const dateStr = d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+    const heureStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `${dateStr} ${heureStr}`;
+  }
 
-  const maintenant = new Date();
-  const memeJour =
-    d.getFullYear() === maintenant.getFullYear() &&
-    d.getMonth() === maintenant.getMonth() &&
-    d.getDate() === maintenant.getDate();
-
-  const heureStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (memeJour) return heureStr;
-
-  const dateStr = d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
-  return `${dateStr} ${heureStr}`;
-}
-
-function tooltipDateLocale(row) {
-  if (!row || !row.last_updated) return "";
-  const d = new Date(row.last_updated);
-  if (Number.isNaN(d.getTime())) return "";
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "heure locale";
-  return `${d.toLocaleString([], {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })} (${tz})`;
-}
+  function tooltipDateLocale(row) {
+    const d = extraireDateMaj(row);
+    if (!d) return '';
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'heure locale';
+    return `${d.toLocaleString([], {
+      weekday: 'short',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })} (${tz})`;
+  }
 
 $(function () {
   const CFG = window.CFG;
@@ -168,13 +158,18 @@ $(function () {
     colNum('mom_12_1', 'Momentum 12-1', 'Performance sur 12 mois en excluant le dernier mois.', 0, ' %', classeSigne),
     {
       data: null,
+      defaultContent: '',
+      className: 'num',
+      title: 'Mise à jour',
       render: function (_data, type, row) {
-        if (type === "sort" || type === "type") {
-          return row.last_updated || row.maj || "";
+        if (type === 'sort' || type === 'type') {
+          const d = extraireDateMaj(row);
+          return d ? d.getTime() : 0;
         }
         const aff = formaterDateLocale(row);
+        if (type === 'export') return aff;
         const tip = tooltipDateLocale(row);
-        return tip ? `<span title="${tip}">${aff}</span>` : aff;
+        return tip ? `<span title="${esc(tip)}">${esc(aff)}</span>` : esc(aff);
       }
     }
   ];
