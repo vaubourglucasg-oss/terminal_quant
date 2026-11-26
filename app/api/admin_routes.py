@@ -19,7 +19,7 @@ from app.engine.fetcher import (vider_cache, lister_entrees_cache,
                                 normaliser_hypotheses)
 from app.engine.scheduler import (lancer_cycle_asynchrone, lancer_indice_asynchrone,
                                   obtenir_etat_refresh, est_marche_ouvert_ou_recente_cloture,
-                                  executer_liste_indices_atomique, TOUS_LES_INDICES,
+                                  executer_cycle_intelligent,
                                   acquerir_verrou, liberer_verrou)
 router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -149,7 +149,7 @@ async def api_admin_vider_tout_cache(user: dict = Depends(require_admin)):
 
 @router.post("/api/cron/refresh")
 async def api_cron_refresh(request: Request):
-    """Point d'entrée sécurisé pour Google Cloud Scheduler (exécute le cycle avec CPU actif)."""
+    """Point d'entrée sécurisé pour Google Cloud Scheduler : remplit les continents manquants puis rafraîchit le plus vieux."""
     secret_attendu = os.environ.get("CRON_SECRET", "").strip()
     secret_fourni = request.headers.get("X-Cron-Secret", "").strip()
 
@@ -164,7 +164,7 @@ async def api_cron_refresh(request: Request):
         )
 
     try:
-        total_bascules = await asyncio.to_thread(executer_liste_indices_atomique, TOUS_LES_INDICES, "Cloud Scheduler")
+        total_bascules = await asyncio.to_thread(executer_cycle_intelligent, "Cloud Scheduler")
     finally:
         liberer_verrou("cycle_complet")
 
@@ -172,7 +172,7 @@ async def api_cron_refresh(request: Request):
         status_code=200,
         content={
             "status": "completed",
-            "message": f"Mise à jour terminée ({total_bascules} titres basculés)",
+            "message": f"Cycle terminé ({total_bascules} titres basculés)",
             "marche": msg_marche
         }
     )

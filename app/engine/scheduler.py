@@ -15,7 +15,7 @@ from app.engine.fetcher import (analyser_action_brute, analyser_tendances_macro,
                                 obtenir_taux_sans_risque, obtenir_benchmark,
                                 normaliser_hypotheses, _conn_cache,
                                 vider_staging, valider_staging_vers_cache,
-                                lire_meta, ecrire_meta)
+                                statut_indices_cache, lire_meta, ecrire_meta)
 from app.api.screener import REGIONS, obtenir_tickers_pour_indice
 
 logger = logging.getLogger("terminal_quant.scheduler")
@@ -33,12 +33,47 @@ PLAGES_MARCHES = {
     "Asie-Pacifique (CSI 300 / Nikkei / ASX)": (dtime(1, 0), dtime(9, 30)),
 }
 
-TOUS_LES_INDICES = [nom for groupe in REGIONS.values() for nom in groupe]
+ORDRE_CONTINENTS = ["Europe", "Amérique du Nord", "Asie et marchés émergents"]
+TOUS_LES_INDICES = [nom for cont in ORDRE_CONTINENTS for nom in REGIONS.get(cont, [])]
 DELAI_ENTRE_INDICES_SEC = 5
+MAX_DUREE_CYCLE_SEC = 1400  # 23 min max par exécution (marge sous les 30 min Cloud Run)
 
 _scheduler = None
 _stop_event = threading.Event()
 
+
+def _continent_de(nom_indice: str) -> str:
+    for cont, marches in REGIONS.items():
+        if nom_indice in marches:
+            return cont
+    return "Autre"
+
+
+def construire_file_intelligente() -> list[tuple[str, str]]:
+    """
+    1. Remplit tous les indices manquants ou incomplets d'un continent, puis du suivant.
+    2. Une fois tous les continents complets, trie tous les indices du plus vieux au plus récent.
+    """
+    stats = statut_indices_cache(TOUS_LES_INDICES)
+    file_ordonnee: list[tuple[str, str]] = []
+    complets: list[str] = []
+
+    for cont in ORDRE_CONTINENTS:
+        for idx in REGIONS.get(cont, []):
+            nb_cache = stats.get(idx, {}).get("nb", 0)
+            nb_attendus = len(obtenir_tickers_pour_indice(idx))
+            seuil = max(1, int(nb_attendus * 0.6))
+            if nb_cache < seuil:
+                file_ordonnee.append((idx, f"Continent : {cont} ({nb_cache}/{nb_attendus})"))
+            else:
+                complets.append(idx)
+
+    complets.sort(key=lambda idx: stats[idx]["maj"] or "")
+    for idx in complets:
+        maj = stats[idx]["maj"] or "ancien"
+        file_ordonnee.append((idx, f"Plus vieux ({maj[:16].replace('T', ' ')})"))
+
+    return file_ordonnee
 
 def _maj_etat_refresh(**kwargs):
     etat = lire_meta("etat_refresh") or {
@@ -74,7 +109,6 @@ def obtenir_etat_refresh() -> dict:
         "derniere_bascule": None,
         "heartbeat": 0,
     }
-    # Si un conteneur Cloud Run a été coupé sans finir, réinitialise l'affichage après 4 min d'inactivité
     if etat.get("en_cours") and (time.time() - float(etat.get("heartbeat") or 0)) > 240:
         etat["en_cours"] = False
     return etat
@@ -157,10 +191,10 @@ def liberer_verrou(job_id: str):
         logger.warning(f"Erreur libération verrou {job_id} : {e}")
 
 
-def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp: dict, compteur: dict) -> int:
+def _charger_un_indice_vers_staging(nom_indice: str, libelle_cible: str, rf: float, macro: dict, hyp: dict, compteur: dict) -> int:
     bench = obtenir_benchmark(nom_indice)
     tickers = list(dict.fromkeys(obtenir_tickers_pour_indice(nom_indice)))
-    logger.info(f"[{nom_indice}] Chargement vers staging de {len(tickers)} titres.")
+    logger.info(f"[{nom_indice}] ({libelle_cible}) Chargement vers staging de {len(tickers)} titres.")
     reussis_indice = 0
 
     def worker_action(tk):
@@ -196,7 +230,7 @@ def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp
             if compteur["faits"] % 10 == 0 or compteur["faits"] == compteur["total"]:
                 prolonger_verrou("cycle_complet", 300)
                 _maj_etat_refresh(
-                    cible=nom_indice,
+                    cible=libelle_cible,
                     faits=compteur["faits"],
                     total=compteur["total"],
                     reussis=compteur["reussis"],
@@ -205,15 +239,17 @@ def _charger_un_indice_vers_staging(nom_indice: str, rf: float, macro: dict, hyp
     return reussis_indice
 
 
-def executer_liste_indices_atomique(indices: list[str], mode: str) -> int:
+def executer_liste_indices_atomique(indices_avec_phase: list[tuple[str, str]], mode: str, max_duree_sec: int = MAX_DUREE_CYCLE_SEC) -> int:
     """Charge chaque indice en staging puis le bascule atomiquement dès qu'il est complet."""
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    tous_tickers = [tk for idx in indices for tk in obtenir_tickers_pour_indice(idx)]
+    debut_ts = time.time()
+    tous_tickers = [tk for idx, _ in indices_avec_phase for tk in obtenir_tickers_pour_indice(idx)]
     compteur = {"faits": 0, "total": len(tous_tickers), "reussis": 0, "echecs": 0}
     total_bascules = 0
 
+    premier_libelle = f"{indices_avec_phase[0][0]} – {indices_avec_phase[0][1]}" if indices_avec_phase else ""
     _maj_etat_refresh(
-        en_cours=True, mode=mode, cible=indices[0] if indices else "",
+        en_cours=True, mode=mode, cible=premier_libelle,
         faits=0, total=len(tous_tickers), reussis=0, echecs=0,
         debut=now_iso, fin=None
     )
@@ -223,24 +259,28 @@ def executer_liste_indices_atomique(indices: list[str], mode: str) -> int:
         macro = analyser_tendances_macro(forcer_yahoo=True)
         hyp_defaut = normaliser_hypotheses(None)
 
-        for i, nom_indice in enumerate(indices):
+        for i, (nom_indice, phase) in enumerate(indices_avec_phase):
             if _stop_event.is_set():
                 logger.info(f"[{mode}] Arrêt prématuré demandé.")
+                break
+
+            if i > 0 and (time.time() - debut_ts) > max_duree_sec:
+                logger.info(f"[{mode}] Budget temps ({max_duree_sec}s) atteint : reprise au prochain passage.")
                 break
 
             if i > 0:
                 time.sleep(DELAI_ENTRE_INDICES_SEC)
 
             prolonger_verrou("cycle_complet", 300)
-            _maj_etat_refresh(cible=nom_indice)
+            libelle_cible = f"{nom_indice} ({phase})"
+            _maj_etat_refresh(cible=libelle_cible)
             try:
                 vider_staging([nom_indice])
-                _charger_un_indice_vers_staging(nom_indice, rf, macro, hyp_defaut, compteur)
-                # Bascule atomique immédiate pour cet indice dès que tous ses titres sont prêts
+                _charger_un_indice_vers_staging(nom_indice, libelle_cible, rf, macro, hyp_defaut, compteur)
                 nb = valider_staging_vers_cache([nom_indice])
                 total_bascules += nb
                 bascule_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                logger.info(f"[{mode}] {nom_indice} basculé atomiquement ({nb} titres).")
+                logger.info(f"[{mode}] {nom_indice} ({_continent_de(nom_indice)}) basculé atomiquement ({nb} titres).")
                 _maj_etat_refresh(derniere_bascule=f"{bascule_iso} ({nom_indice} : {nb} titres)")
             except Exception as e:
                 logger.error(f"[{mode}] Erreur sur {nom_indice} : {e}")
@@ -258,15 +298,21 @@ def executer_liste_indices_atomique(indices: list[str], mode: str) -> int:
         return total_bascules
 
 
+def executer_cycle_intelligent(mode: str = "Scheduler") -> int:
+    """Exécute la file intelligente : continents manquants d'abord, puis indices les plus vieux."""
+    file_indices = construire_file_intelligente()
+    return executer_liste_indices_atomique(file_indices, mode=mode, max_duree_sec=MAX_DUREE_CYCLE_SEC)
+
+
 def lancer_cycle_asynchrone(mode: str = "Scheduler") -> bool:
-    """Lance la mise à jour complète des 20 indices en arrière-plan."""
+    """Lance la mise à jour intelligente en arrière-plan."""
     if not acquerir_verrou("cycle_complet", duree_secondes=300):
         logger.info("[Scheduler] Une mise à jour est déjà en cours, appel ignoré.")
         return False
 
     def runner():
         try:
-            executer_liste_indices_atomique(TOUS_LES_INDICES, mode=mode)
+            executer_cycle_intelligent(mode=mode)
         finally:
             liberer_verrou("cycle_complet")
 
@@ -285,7 +331,11 @@ def lancer_indice_asynchrone(nom_indice: str) -> bool:
 
     def runner():
         try:
-            executer_liste_indices_atomique([nom_indice], mode=f"Admin ({nom_indice})")
+            executer_liste_indices_atomique(
+                [(nom_indice, f"Manuel – {_continent_de(nom_indice)}")],
+                mode=f"Admin ({nom_indice})",
+                max_duree_sec=1800
+            )
         finally:
             liberer_verrou("cycle_complet")
 
@@ -319,7 +369,7 @@ def demarrer_scheduler() -> BackgroundScheduler:
     )
 
     _scheduler.start()
-    logger.info("Planificateur APScheduler démarré (cycle atomique par indice toutes les 5h).")
+    logger.info("Planificateur APScheduler démarré (continents manquants puis rotation plus vieux).")
     return _scheduler
 
 

@@ -430,6 +430,29 @@ def valider_staging_vers_cache(indices_cibles: list[str] | None = None) -> int:
         _exporter_vers_gcs(forcer=True)
     return nb_bascules
 
+def statut_indices_cache(tous_indices: list[str]) -> dict[str, dict]:
+    """Retourne pour chaque indice le nombre de titres en cache et l'horodatage de sa dernière mise à jour."""
+    _importer_depuis_gcs(forcer=True)
+    stats = {idx: {"nb": 0, "maj": None} for idx in tous_indices}
+    conn = _conn_cache()
+    try:
+        rows = conn.execute("""
+            SELECT indice, COUNT(DISTINCT ticker) AS nb, MIN(last_updated) AS maj
+            FROM cache_actions
+            WHERE version = ? AND indice IS NOT NULL
+            GROUP BY indice
+        """, (VERSION_SCHEMA,)).fetchall()
+        for r in rows:
+            idx = r["indice"]
+            if idx in stats:
+                stats[idx] = {
+                    "nb": int(r["nb"] or 0),
+                    "maj": r["maj"],
+                }
+    finally:
+        conn.close()
+    return stats
+
 
 def lister_entrees_cache(limite: int = 500) -> list[dict]:
     _importer_depuis_gcs(forcer=False)
