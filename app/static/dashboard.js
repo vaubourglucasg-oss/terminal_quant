@@ -1,6 +1,58 @@
 /* dashboard.js - Tableau de bord complet */
 window.Quant = window.Quant || {};
 
+function formaterDateLocale(row) {
+  if (!row) return "—";
+  let d = null;
+
+  if (row.last_updated) {
+    const parsed = new Date(row.last_updated);
+    if (!Number.isNaN(parsed.getTime())) d = parsed;
+  }
+
+  // Compatibilité avec les anciennes entrées sans last_updated ("16:53 UTC" ou "26/11 16:53 UTC")
+  if (!d && typeof row.maj === "string") {
+    const m = row.maj.trim().match(/^(?:(\d{2})\/(\d{2})(?:\/(\d{4}))?\s+)?(\d{2}):(\d{2})\s*UTC$/i);
+    if (m) {
+      const now = new Date();
+      const annee = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
+      const mois = m[2] ? parseInt(m[2], 10) - 1 : now.getUTCMonth();
+      const jour = m[1] ? parseInt(m[1], 10) : now.getUTCDate();
+      d = new Date(Date.UTC(annee, mois, jour, parseInt(m[4], 10), parseInt(m[5], 10)));
+    } else {
+      return row.maj || "—";
+    }
+  }
+
+  if (!d || Number.isNaN(d.getTime())) return row.maj || "—";
+
+  const maintenant = new Date();
+  const memeJour =
+    d.getFullYear() === maintenant.getFullYear() &&
+    d.getMonth() === maintenant.getMonth() &&
+    d.getDate() === maintenant.getDate();
+
+  const heureStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (memeJour) return heureStr;
+
+  const dateStr = d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
+  return `${dateStr} ${heureStr}`;
+}
+
+function tooltipDateLocale(row) {
+  if (!row || !row.last_updated) return "";
+  const d = new Date(row.last_updated);
+  if (Number.isNaN(d.getTime())) return "";
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "heure locale";
+  return `${d.toLocaleString([], {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })} (${tz})`;
+}
+
 $(function () {
   const CFG = window.CFG;
   if (window.Reglages && CFG && CFG.indice) {
@@ -114,8 +166,17 @@ $(function () {
     colNum('cagr_ca', 'Croiss. CA 3 ans', 'Croissance annuelle moyenne du chiffre d\'affaires sur 3 ans.', 1, ' %', classeSigne),
     colNum('vol', 'Volatilité', 'Volatilité annualisée sur 1 an.', 0, ' %'),
     colNum('mom_12_1', 'Momentum 12-1', 'Performance sur 12 mois en excluant le dernier mois.', 0, ' %', classeSigne),
-    { data: 'maj', defaultContent: '', className: 't-g discret', title: 'Mise à jour',
-      render: (v, type) => type === 'display' ? esc(v) : v },
+    {
+      data: null,
+      render: function (_data, type, row) {
+        if (type === "sort" || type === "type") {
+          return row.last_updated || row.maj || "";
+        }
+        const aff = formaterDateLocale(row);
+        const tip = tooltipDateLocale(row);
+        return tip ? `<span title="${tip}">${aff}</span>` : aff;
+      }
+    }
   ];
 
   const COLS_EXPORT = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14];
