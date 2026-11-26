@@ -36,7 +36,7 @@ PLAGES_MARCHES = {
 ORDRE_CONTINENTS = ["Europe", "Amérique du Nord", "Asie et marchés émergents"]
 TOUS_LES_INDICES = [nom for cont in ORDRE_CONTINENTS for nom in REGIONS.get(cont, [])]
 DELAI_ENTRE_INDICES_SEC = 5
-MAX_DUREE_CYCLE_SEC = 1400  # 23 min max par exécution (marge sous les 30 min Cloud Run)
+MAX_DUREE_CYCLE_SEC = 1100
 
 _scheduler = None
 _stop_event = threading.Event()
