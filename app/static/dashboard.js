@@ -2,87 +2,133 @@
 window.Quant = window.Quant || {};
 
 function extraireDateMaj(row) {
-    if (!row) return null;
-    if (row.last_updated) {
-      const parsed = new Date(row.last_updated);
-      if (!Number.isNaN(parsed.getTime())) return parsed;
+  if (!row) return null;
+  if (row.last_updated) {
+    const parsed = new Date(row.last_updated);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  if (typeof row.maj === 'string') {
+    const m = row.maj.trim().match(/^(?:(\d{2})\/(\d{2})(?:\/(\d{4}))?\s+)?(\d{2}):(\d{2})\s*UTC$/i);
+    if (m) {
+      const now = new Date();
+      const annee = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
+      const mois = m[2] ? parseInt(m[2], 10) - 1 : now.getUTCMonth();
+      const jour = m[1] ? parseInt(m[1], 10) : now.getUTCDate();
+      const d = new Date(Date.UTC(annee, mois, jour, parseInt(m[4], 10), parseInt(m[5], 10)));
+      if (!Number.isNaN(d.getTime())) return d;
     }
-    if (typeof row.maj === 'string') {
-      const m = row.maj.trim().match(/^(?:(\d{2})\/(\d{2})(?:\/(\d{4}))?\s+)?(\d{2}):(\d{2})\s*UTC$/i);
-      if (m) {
-        const now = new Date();
-        const annee = m[3] ? parseInt(m[3], 10) : now.getUTCFullYear();
-        const mois = m[2] ? parseInt(m[2], 10) - 1 : now.getUTCMonth();
-        const jour = m[1] ? parseInt(m[1], 10) : now.getUTCDate();
-        const d = new Date(Date.UTC(annee, mois, jour, parseInt(m[4], 10), parseInt(m[5], 10)));
-        if (!Number.isNaN(d.getTime())) return d;
-      }
-    }
-    return null;
   }
+  return null;
+}
 
-  function formaterDateLocale(row) {
-    const d = extraireDateMaj(row);
-    if (!d) return (row && row.maj) ? row.maj : '—';
-    const dateStr = d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
-    const heureStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    return `${dateStr} ${heureStr}`;
-  }
+function formaterDateLocale(row) {
+  const d = extraireDateMaj(row);
+  if (!d) return (row && row.maj) ? row.maj : '—';
+  const dateStr = d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+  const heureStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `${dateStr} ${heureStr}`;
+}
 
-  function tooltipDateLocale(row) {
-    const d = extraireDateMaj(row);
-    if (!d) return '';
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'heure locale';
-    return `${d.toLocaleString([], {
-      weekday: 'short',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })} (${tz})`;
-  }
+function tooltipDateLocale(row) {
+  const d = extraireDateMaj(row);
+  if (!d) return '';
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'heure locale';
+  return `${d.toLocaleString([], {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })} (${tz})`;
+}
 
 $(function () {
   const CFG = window.CFG;
   if (window.Reglages && CFG && CFG.indice) {
     window.Reglages.set('dernier_indice', CFG.indice);
   }
-  let favoris = {};
-  try { favoris = JSON.parse(localStorage.getItem('quant_favoris') || '{}'); } catch (e) { favoris = {}; }
 
-  fetch('/api/user/favorites')
-    .then(r => r.ok ? r.json() : null)
-    .then(d => {
-      if (d && Array.isArray(d.favorites)) {
-        favoris = {};
-        d.favorites.forEach(tk => { favoris[tk] = true; });
-        try { localStorage.setItem('quant_favoris', JSON.stringify(favoris)); } catch (e) {}
-        $('.etoile').each(function () {
-          const tk = this.dataset.ticker;
-          $(this).toggleClass('actif', !!favoris[tk]);
-        });
-        if (typeof table !== 'undefined' && table.draw) {
-          table.draw(false);
-        }
-      }
-    }).catch(() => {});
+  const urlParams = new URLSearchParams(window.location.search);
+  let focusTicker = (urlParams.get('focus') || '').trim().toUpperCase();
+  let focusAutoOuvert = false;
+
+  const LISTES_DEFAUT = ['À renforcer', 'Long terme', 'Surveillance'];
+  let watchlists = { lists: [...LISTES_DEFAUT], items: {} };
+  try {
+    const cacheWl = JSON.parse(localStorage.getItem('quant_watchlists') || 'null');
+    if (cacheWl && Array.isArray(cacheWl.lists) && cacheWl.items) {
+      watchlists = cacheWl;
+    }
+  } catch (e) {}
 
   const donnees = {};
   const lignes = {};
+  const devisesVues = new Set();
   let total = 0, termine = false;
 
   const ND = '<span class="nd">–</span>';
   const vide = v => v === null || v === undefined || Number.isNaN(v);
   const fmt = (v, d = 1, suf = '') => vide(v) ? ND : Number(v).toFixed(d).replace('.', ',') + suf;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const SECTEURS_FR = { 'Technology': 'Technologie', 'Healthcare': 'Santé', 'Financial Services': 'Finance',
+  const SECTEURS_FR = {
+    'Technology': 'Technologie', 'Healthcare': 'Santé', 'Financial Services': 'Finance',
     'Consumer Cyclical': 'Conso. cyclique', 'Consumer Defensive': 'Conso. défensive', 'Industrials': 'Industrie',
     'Energy': 'Énergie', 'Basic Materials': 'Matériaux', 'Utilities': 'Services publics',
-    'Real Estate': 'Immobilier', 'Communication Services': 'Communication' };
+    'Real Estate': 'Immobilier', 'Communication Services': 'Communication'
+  };
   const classeSigne = v => vide(v) ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : ''));
 
   Object.assign(window.Quant, { donnees, esc, fmt, vide, SECTEURS_FR });
+
+  function listesDuTicker(tk) {
+    return Array.isArray(watchlists.items[tk]) ? watchlists.items[tk] : [];
+  }
+
+  function sauverWatchlistsLocal() {
+    try { localStorage.setItem('quant_watchlists', JSON.stringify(watchlists)); } catch (e) {}
+  }
+
+  function synchroniserSelectWatchlists() {
+    const sel = $('#f-fav');
+    if (!sel.length) return;
+    const valActuelle = sel.val();
+    let html = '<option value="">Toutes</option><option value="__ANY__">Dans une liste (★)</option>';
+    watchlists.lists.forEach(nom => {
+      html += `<option value="${esc(nom)}">${esc(nom)}</option>`;
+    });
+    sel.html(html);
+    if (valActuelle && sel.find(`option[value="${valActuelle.replace(/"/g, '\\"')}"]`).length) {
+      sel.val(valActuelle);
+    }
+  }
+
+  function rafraichirEtoiles() {
+    $('.etoile').each(function () {
+      const tk = this.dataset.ticker;
+      const lst = listesDuTicker(tk);
+      const actif = lst.length > 0;
+      $(this).toggleClass('actif', actif);
+      this.title = actif ? `Listes : ${lst.join(', ')}` : 'Ajouter à une liste de suivi';
+      this.textContent = lst.length > 1 ? `★${lst.length}` : '★';
+    });
+  }
+
+  synchroniserSelectWatchlists();
+
+  fetch('/api/user/watchlists')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (d && Array.isArray(d.lists) && d.items) {
+        watchlists = { lists: d.lists, items: d.items };
+        sauverWatchlistsLocal();
+        synchroniserSelectWatchlists();
+        rafraichirEtoiles();
+        if (typeof table !== 'undefined' && table.draw) {
+          table.draw(false);
+        }
+      }
+    }).catch(() => {});
 
   function colNum(champ, titre, aide, d, suf, classeFn) {
     return {
@@ -98,11 +144,16 @@ $(function () {
   const dl = (label, valeur, aide) => `<div><dt title="${esc(aide || '')}">${label}</dt><dd>${valeur}</dd></div>`;
 
   const COLONNES = [
-    { data: null, orderable: false, className: 't-g', title: '', width: '52px',
-      render: (d, type, r) => type === 'display'
-        ? `<i class="etoile ${favoris[r.ticker] ? 'actif' : ''}" data-ticker="${esc(r.ticker)}" role="button" tabindex="0" aria-label="Ajouter aux favoris" title="Favori">★</i>`
-        + `<button type="button" class="cmp ${(window.Quant && window.Quant.cmpSel || []).includes(r.ticker) ? 'actif' : ''}" data-ticker="${esc(r.ticker)}" title="Ajouter au comparateur" aria-label="Comparer ${esc(r.ticker)}">⇄</button>`
-        : (favoris[r.ticker] ? 1 : 0) },
+    { data: null, orderable: false, className: 't-g', title: '', width: '58px',
+      render: (d, type, r) => {
+        const lst = listesDuTicker(r.ticker);
+        const actif = lst.length > 0;
+        if (type !== 'display') return actif ? 1 : 0;
+        const labelEtoile = lst.length > 1 ? `★${lst.length}` : '★';
+        const tipEtoile = actif ? `Listes : ${lst.join(', ')}` : 'Ajouter à une liste de suivi';
+        return `<i class="etoile ${actif ? 'actif' : ''}" data-ticker="${esc(r.ticker)}" role="button" tabindex="0" aria-label="Gérer les listes de suivi" title="${esc(tipEtoile)}">${labelEtoile}</i>`
+          + `<button type="button" class="cmp ${(window.Quant && window.Quant.cmpSel || []).includes(r.ticker) ? 'actif' : ''}" data-ticker="${esc(r.ticker)}" title="Ajouter au comparateur" aria-label="Comparer ${esc(r.ticker)}">⇄</button>`;
+      } },
     { data: 'ticker', className: 't-g', title: 'Titre',
       render: (v, type, r) => type === 'display' ? `<div class="titre"><strong>${esc(v)}</strong><span title="${esc(r.nom)}">${esc(r.nom)}</span></div>`
         : (type === 'filter' ? `${v} ${r.nom}` : v) },
@@ -189,19 +240,113 @@ $(function () {
 
   window.Quant.table = table;
 
-  const nombre = id => { const v = parseFloat($(id).val()); return Number.isNaN(v) ? null : v; };
+  /* ---------- Bannière d'isolation d'un titre (Ctrl+K) ---------- */
+  function majBanniereFocus() {
+    let banner = $('#focus-banner');
+    if (!focusTicker) {
+      banner.remove();
+      return;
+    }
+    if (!banner.length) {
+      banner = $(`<div id="focus-banner" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--marine-pale); border:1px solid var(--marine); border-radius:6px; padding:10px 14px; margin-bottom:12px;"></div>`);
+      $('.tableau').before(banner);
+    }
+    const infoTitre = donnees[focusTicker] ? ` — ${esc(donnees[focusTicker].nom)}` : '';
+    banner.html(`
+      <span>
+        <i class="fa-solid fa-crosshairs" style="color:var(--marine); margin-right:6px;"></i>
+        Titre isolé : <strong>${esc(focusTicker)}</strong>${infoTitre}
+        <span class="discret" style="font-size:0.85rem; margin-left:6px;">(scores calculés sur l'ensemble de ${esc(CFG.indice)})</span>
+      </span>
+      <button type="button" id="btn-clear-focus" class="lien-bouton">Afficher tout l'indice</button>
+    `);
+  }
+
+  function tenterOuvrirFocus() {
+    if (!focusTicker || focusAutoOuvert) return;
+    const r = donnees[focusTicker];
+    const rowObj = lignes[focusTicker];
+    if (!r || !rowObj) return;
+    const tr = rowObj.node();
+    if (!tr) return;
+    if (!rowObj.child.isShown()) {
+      rowObj.child(detailHtml(r), 'detail-ligne').show();
+      $(tr).addClass('ouvert');
+    }
+    focusAutoOuvert = true;
+    majBanniereFocus();
+  }
+
+  function focaliserTicker(tk) {
+    focusTicker = (tk || '').trim().toUpperCase();
+    focusAutoOuvert = false;
+    try {
+      const u = new URL(window.location.href);
+      if (focusTicker) u.searchParams.set('focus', focusTicker);
+      else u.searchParams.delete('focus');
+      window.history.replaceState(null, '', u.toString());
+    } catch (e) {}
+    majBanniereFocus();
+    table.draw();
+    majResume();
+    tenterOuvrirFocus();
+  }
+
+  $(document).on('click', '#btn-clear-focus', function () {
+    focaliserTicker('');
+  });
+
+  majBanniereFocus();
+
+  /* ---------- Filtres DataTables ---------- */
+  const nombre = id => {
+    const el = $(id);
+    if (!el.length) return null;
+    const v = parseFloat(el.val());
+    return Number.isNaN(v) ? null : v;
+  };
+
   $.fn.dataTable.ext.search.push(function (settings, data, idx) {
     if (settings.nTable.id !== 'tbl') return true;
     const r = table.row(idx).data();
     if (!r) return true;
+
+    if (focusTicker) {
+      return (r.ticker || '').toUpperCase() === focusTicker;
+    }
+
+    const cont = $('#f-continent').val();
+    if (cont && r.continent !== cont) return false;
+
+    const dev = $('#f-devise').val();
+    if (dev && r.devise !== dev) return false;
+
     const sect = $('#f-secteur').val(), sig = $('#f-signal').val();
     if (sect && r.secteur !== sect) return false;
     if (sig && !(r.signal || '').startsWith(sig)) return false;
-    if ($('#f-fav').val() === 'oui' && !favoris[r.ticker]) return false;
+
+    const favFiltre = $('#f-fav').val();
+    if (favFiltre) {
+      const lst = listesDuTicker(r.ticker);
+      if (favFiltre === '__ANY__' || favFiltre === 'oui') {
+        if (!lst.length) return false;
+      } else if (!lst.includes(favFiltre)) {
+        return false;
+      }
+    }
+
     if ($('#f-altman').val() === 'sain' && r.altman_zone === 'détresse') return false;
     const pio = r.piotroski_n ? r.piotroski / r.piotroski_n * 9 : null;
-    const regles = [[nombre('#f-score'), r.score, 'min'], [nombre('#f-per'), r.per, 'max'], [nombre('#f-roic'), r.roic, 'min'],
-      [nombre('#f-marge'), r.marge_secu, 'min'], [nombre('#f-pio'), pio, 'min'], [nombre('#f-div'), r.div_yield, 'min']];
+    const regles = [
+      [nombre('#f-cap-min'), r.cap_usd_md, 'min'],
+      [nombre('#f-cap-max'), r.cap_usd_md, 'max'],
+      [nombre('#f-score'), r.score, 'min'],
+      [nombre('#f-per'), r.per, 'max'],
+      [nombre('#f-roic'), r.roic, 'min'],
+      [nombre('#f-marge'), r.marge_secu, 'min'],
+      [nombre('#f-pio'), pio, 'min'],
+      [nombre('#f-div'), r.div_yield, 'min']
+    ];
     for (const [seuil, v, sens] of regles) {
       if (seuil === null) continue;
       if (vide(v)) return false;
@@ -211,6 +356,7 @@ $(function () {
   });
 
   const MAP_FILTRES = {
+    continent: '#f-continent', devise: '#f-devise', cap_min: '#f-cap-min', cap_max: '#f-cap-max',
     secteur: '#f-secteur', signal: '#f-signal', fav: '#f-fav', altman: '#f-altman',
     score: '#f-score', per: '#f-per', roic: '#f-roic', marge: '#f-marge', pio: '#f-pio', div: '#f-div'
   };
@@ -218,7 +364,9 @@ $(function () {
   function sauverFiltres() {
     if (!window.Reglages) return;
     const etat = {};
-    Object.entries(MAP_FILTRES).forEach(([cle, sel]) => { etat[cle] = String($(sel).val() || ''); });
+    Object.entries(MAP_FILTRES).forEach(([cle, sel]) => {
+      if ($(sel).length) etat[cle] = String($(sel).val() || '');
+    });
     window.Reglages.set('filtres_tableau', etat);
   }
 
@@ -226,7 +374,7 @@ $(function () {
     if (!window.Reglages) return;
     const f = window.Reglages.lire('filtres_tableau') || {};
     Object.entries(MAP_FILTRES).forEach(([cle, sel]) => {
-      if (f[cle] !== undefined && f[cle] !== null) $(sel).val(f[cle]);
+      if ($(sel).length && f[cle] !== undefined && f[cle] !== null) $(sel).val(f[cle]);
     });
     table.draw();
   }
@@ -237,9 +385,14 @@ $(function () {
   }
 
   $('.filtres input, .filtres select').on('input change', () => {
+    if (focusTicker) {
+      focusTicker = '';
+      majBanniereFocus();
+    }
     $('.presets button').attr('aria-pressed', 'false');
     sauverFiltres();
     table.draw();
+    majResume();
   });
 
   const PRESETS = {
@@ -250,32 +403,151 @@ $(function () {
     reset: {}
   };
   $('.presets button').on('click', function () {
+    if (focusTicker) {
+      focusTicker = '';
+      majBanniereFocus();
+    }
     $('.filtres input').val(''); $('.filtres select').val('');
     Object.entries(PRESETS[this.dataset.preset] || {}).forEach(([sel, v]) => $(sel).val(v));
     $('.presets button').attr('aria-pressed', 'false');
     if (this.dataset.preset !== 'reset') $(this).attr('aria-pressed', 'true');
     sauverFiltres();
     table.draw();
+    majResume();
   });
 
-  function basculerFavori(el) {
-    const tk = el.dataset.ticker;
-    const estActif = !favoris[tk];
-    if (estActif) favoris[tk] = true; else delete favoris[tk];
-    try { localStorage.setItem('quant_favoris', JSON.stringify(favoris)); } catch (e) { }
-    $(el).toggleClass('actif', estActif);
-    if (typeof table !== 'undefined' && table.draw) {
-      table.draw(false);
-    }
-    fetch('/api/user/favorites', {
+  /* ---------- Menu multi-listes sur l'étoile (Watchlists) ---------- */
+  function fermerMenuWatchlist() {
+    $('#tq-wl-popover').remove();
+  }
+
+  function envoyerActionWatchlist(payload) {
+    return fetch('/api/user/watchlists', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker: tk, action: estActif ? 'add' : 'remove' })
-    }).catch(function (err) { console.error('Erreur sauvegarde favori:', err); });
+      body: JSON.stringify(payload)
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d && Array.isArray(d.lists) && d.items) {
+          watchlists = { lists: d.lists, items: d.items };
+          sauverWatchlistsLocal();
+          synchroniserSelectWatchlists();
+          rafraichirEtoiles();
+          if ($('#f-fav').val()) table.draw(false);
+        }
+      })
+      .catch(err => console.error('Erreur sauvegarde watchlist:', err));
   }
-  $('#tbl tbody').on('click', '.etoile', function (e) { e.stopPropagation(); basculerFavori(this); });
-  $('#tbl tbody').on('keydown', '.etoile', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); basculerFavori(this); } });
 
+  function basculerListeTicker(tk, listName) {
+    const actuelles = listesDuTicker(tk);
+    if (actuelles.includes(listName)) {
+      watchlists.items[tk] = actuelles.filter(x => x !== listName);
+      if (!watchlists.items[tk].length) delete watchlists.items[tk];
+    } else {
+      watchlists.items[tk] = [...actuelles, listName];
+    }
+    sauverWatchlistsLocal();
+    rafraichirEtoiles();
+    if ($('#f-fav').val()) table.draw(false);
+    envoyerActionWatchlist({ action: 'toggle', list_name: listName, ticker: tk });
+  }
+
+  function ouvrirMenuWatchlist(el) {
+    const tk = el.dataset.ticker;
+    const dejaOuvert = $('#tq-wl-popover');
+    if (dejaOuvert.length && dejaOuvert.data('ticker') === tk) {
+      fermerMenuWatchlist();
+      return;
+    }
+    fermerMenuWatchlist();
+
+    const actives = listesDuTicker(tk);
+    const itemsHtml = watchlists.lists.map(nom => {
+      const coche = actives.includes(nom) ? 'checked' : '';
+      const nbDansListe = Object.values(watchlists.items).filter(arr => Array.isArray(arr) && arr.includes(nom)).length;
+      return `
+        <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 8px; border-radius:4px; cursor:pointer; font-size:0.86rem; color:var(--encre);">
+          <span style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" class="tq-wl-chk" data-list="${esc(nom)}" ${coche} style="accent-color:var(--marine); cursor:pointer;">
+            <span>${esc(nom)}</span>
+          </span>
+          <small class="discret">${nbDansListe}</small>
+        </label>
+      `;
+    }).join('');
+
+    const pop = $(`
+      <div id="tq-wl-popover" data-ticker="${esc(tk)}" role="dialog" aria-label="Listes de suivi pour ${esc(tk)}"
+           style="position:fixed; z-index:9998; width:250px; background:var(--surface); color:var(--encre); border:1px solid var(--trait); border-radius:6px; box-shadow:0 10px 28px rgba(0,0,0,0.35); padding:10px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding-bottom:6px; margin-bottom:6px; border-bottom:1px solid var(--trait);">
+          <strong style="font-size:0.85rem;">Listes · ${esc(tk)}</strong>
+          <button type="button" id="tq-wl-close" style="background:none; border:none; color:var(--muted); cursor:pointer; font-size:1rem; line-height:1;" aria-label="Fermer">×</button>
+        </div>
+        <div class="tq-wl-items" style="display:flex; flex-direction:column; gap:2px; max-height:190px; overflow-y:auto;">
+          ${itemsHtml}
+        </div>
+        <form id="tq-wl-new-form" style="display:flex; gap:6px; margin-top:8px; padding-top:8px; border-top:1px solid var(--trait);">
+          <input type="text" id="tq-wl-new-input" placeholder="Nouvelle liste…" maxlength="40"
+                 style="flex:1; min-width:0; font:inherit; font-size:0.82rem; padding:4px 7px; border:1px solid var(--trait); border-radius:4px; background:var(--papier); color:var(--encre);">
+          <button type="submit" class="lien-bouton" style="padding:4px 9px; font-size:0.82rem;">+</button>
+        </form>
+      </div>
+    `);
+
+    $('body').append(pop);
+
+    const rect = el.getBoundingClientRect();
+    const popW = 250;
+    const popH = pop.outerHeight() || 230;
+    let left = rect.left;
+    let top = rect.bottom + 6;
+    if (left + popW > window.innerWidth - 12) left = Math.max(12, window.innerWidth - popW - 12);
+    if (top + popH > window.innerHeight - 12) top = Math.max(12, rect.top - popH - 6);
+    pop.css({ left: `${left}px`, top: `${top}px` });
+
+    pop.on('click', e => e.stopPropagation());
+    pop.find('#tq-wl-close').on('click', fermerMenuWatchlist);
+    pop.find('.tq-wl-chk').on('change', function () {
+      basculerListeTicker(tk, this.dataset.list);
+    });
+    pop.find('#tq-wl-new-form').on('submit', function (e) {
+      e.preventDefault();
+      const nouvelle = ($('#tq-wl-new-input').val() || '').trim();
+      if (!nouvelle) return;
+      if (!watchlists.lists.includes(nouvelle)) watchlists.lists.push(nouvelle);
+      const actuelles = listesDuTicker(tk);
+      if (!actuelles.includes(nouvelle)) watchlists.items[tk] = [...actuelles, nouvelle];
+      sauverWatchlistsLocal();
+      synchroniserSelectWatchlists();
+      rafraichirEtoiles();
+      envoyerActionWatchlist({ action: 'create_list', list_name: nouvelle, ticker: tk });
+      fermerMenuWatchlist();
+    });
+  }
+
+  $('#tbl tbody').on('click', '.etoile', function (e) {
+    e.stopPropagation();
+    ouvrirMenuWatchlist(this);
+  });
+  $('#tbl tbody').on('keydown', '.etoile', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      ouvrirMenuWatchlist(this);
+    }
+  });
+  $(document).on('click', function (e) {
+    if (!$(e.target).closest('#tq-wl-popover, .etoile').length) {
+      fermerMenuWatchlist();
+    }
+  });
+  $(document).on('keydown', function (e) {
+    if (e.key === 'Escape') fermerMenuWatchlist();
+  });
+
+  /* ---------- Détail dépliable d'une action ---------- */
   function detailHtml(r) {
     const alertes = [].concat(r.alertes || [], r.alertes_score || []);
     const fourch = (!vide(r.valo_bear) && !vide(r.valo_bull)) ? ` <small>(${fmt(r.valo_bear, 2)} – ${fmt(r.valo_bull, 2)})</small>` : '';
@@ -423,6 +695,7 @@ $(function () {
       if (document.activeElement && $(document.activeElement).closest('.dataTables_filter').length) return;
       table.draw(false);
       majResume();
+      tenterOuvrirFocus();
     }, 100);
   };
 
@@ -450,12 +723,21 @@ $(function () {
       const r = JSON.parse(e.data);
       if (!r || !r.ticker) return;
       donnees[r.ticker] = r;
+      if (r.devise && !devisesVues.has(r.devise) && $('#f-devise').length) {
+        devisesVues.add(r.devise);
+        $('#f-devise').append(`<option value="${esc(r.devise)}">${esc(r.devise)}</option>`);
+      }
       if (lignes[r.ticker]) {
         lignes[r.ticker].data(r);
       } else {
         lignes[r.ticker] = table.row.add(r);
       }
-      redessiner();
+      if (focusTicker && r.ticker.toUpperCase() === focusTicker) {
+        table.draw(false);
+        tenterOuvrirFocus();
+      } else {
+        redessiner();
+      }
     } catch (err) {}
   };
 
@@ -477,6 +759,9 @@ $(function () {
           lignes[tk].data(donnees[tk]);
         }
       });
+      if (focusTicker && donnees[focusTicker] && lignes[focusTicker]?.child.isShown()) {
+        lignes[focusTicker].child(detailHtml(donnees[focusTicker]), 'detail-ligne').show();
+      }
       redessiner();
     } catch (err) {}
   });
@@ -493,6 +778,7 @@ $(function () {
     }
     table.draw(false);
     majResume();
+    tenterOuvrirFocus();
   });
 
   src.onerror = () => {
@@ -501,5 +787,5 @@ $(function () {
     $('#etat').text('Connexion interrompue : rechargez la page.');
   };
 
-  Object.assign(window.Quant, { src, majResume });
+  Object.assign(window.Quant, { src, majResume, focaliserTicker });
 });

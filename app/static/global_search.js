@@ -16,34 +16,36 @@
     style.textContent = `
       .tq-k-overlay {
         position: fixed; inset: 0; z-index: 9999;
-        background: rgba(0, 0, 0, 0.72);
+        background: rgba(0, 0, 0, 0.58);
         display: none; align-items: flex-start; justify-content: center;
         padding-top: 9vh;
       }
       .tq-k-overlay.ouvert { display: flex; }
       .tq-k-box {
         width: min(680px, 94vw);
-        background: #18181b;
-        border: 1px solid #3f3f46;
+        background: var(--surface, #1a1a18);
+        border: 1px solid var(--trait, #2d2c29);
         border-radius: 8px;
-        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
         overflow: hidden;
-        color: #f4f4f5;
+        color: var(--encre, #ece8df);
         font-family: inherit;
       }
       .tq-k-head {
         display: flex; align-items: center; gap: 10px;
         padding: 12px 16px;
-        border-bottom: 1px solid #27272a;
-        background: #1f1f23;
+        border-bottom: 1px solid var(--trait, #2d2c29);
+        background: var(--surface-alt, var(--papier, #121211));
       }
       .tq-k-input {
         flex: 1; background: transparent; border: none; outline: none;
-        color: #f4f4f5; font-size: 15px;
+        color: var(--encre, #ece8df); font-size: 15px;
       }
       .tq-k-kbd {
-        font-size: 11px; color: #a1a1aa; background: #27272a;
-        border: 1px solid #3f3f46; border-radius: 4px; padding: 2px 6px;
+        font-size: 11px; color: var(--muted, #98948a);
+        background: var(--surface, #1a1a18);
+        border: 1px solid var(--trait, #2d2c29);
+        border-radius: 4px; padding: 2px 6px;
       }
       .tq-k-list {
         max-height: 410px; overflow-y: auto;
@@ -51,30 +53,24 @@
       .tq-k-item {
         display: flex; justify-content: space-between; align-items: center; gap: 12px;
         padding: 10px 16px;
-        border-bottom: 1px solid #232327;
+        border-bottom: 1px solid var(--trait, #2d2c29);
         cursor: pointer;
       }
-      .tq-k-item:hover, .tq-k-item.actif { background: #27272a; }
+      .tq-k-item:hover, .tq-k-item.actif { background: var(--marine-pale, rgba(228, 222, 206, 0.09)); }
       .tq-k-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
       .tq-k-top { display: flex; align-items: center; gap: 8px; }
-      .tq-k-tk { font-weight: 700; color: #ffffff; font-size: 14px; }
-      .tq-k-nom { color: #d4d4d8; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .tq-k-meta { font-size: 11.5px; color: #8e8e93; }
+      .tq-k-tk { font-weight: 700; color: var(--marine, #e4dece); font-size: 14px; }
+      .tq-k-nom { color: var(--encre, #ece8df); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tq-k-meta { font-size: 11.5px; color: var(--muted, #98948a); }
       .tq-k-right { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-      .tq-k-prix { font-weight: 600; font-size: 13.5px; color: #e4e4e7; }
+      .tq-k-prix { font-weight: 600; font-size: 13.5px; color: var(--encre, #ece8df); }
       .tq-k-foot {
         display: flex; justify-content: space-between; align-items: center;
-        padding: 8px 16px; font-size: 11.5px; color: #71717a;
-        background: #141416; border-top: 1px solid #27272a;
+        padding: 8px 16px; font-size: 11.5px; color: var(--muted, #98948a);
+        background: var(--surface-alt, var(--papier, #121211));
+        border-top: 1px solid var(--trait, #2d2c29);
       }
-      .tq-k-empty { padding: 24px 16px; text-align: center; color: #8e8e93; font-size: 13.5px; }
-      .tq-search-trigger {
-        display: inline-flex; align-items: center; gap: 8px;
-        background: #1f1f23; color: #a1a1aa;
-        border: 1px solid #3f3f46; border-radius: 6px;
-        padding: 5px 10px; font-size: 12.5px; cursor: pointer;
-      }
-      .tq-search-trigger:hover { color: #f4f4f5; border-color: #52525b; }
+      .tq-k-empty { padding: 24px 16px; text-align: center; color: var(--muted, #98948a); font-size: 13.5px; }
     `;
     document.head.appendChild(style);
 
@@ -214,8 +210,12 @@
 
   function ouvrirAction(item) {
     fermerRecherche();
-    const indiceCible = item.indice || 'Tous les marchés';
-    if (window.CFG && (window.CFG.indice === indiceCible || window.CFG.indice === 'Tous les marchés') && window.Quant && window.Quant.focaliserTicker) {
+    const indicesItem = Array.isArray(item.indices) && item.indices.length ? item.indices : (item.indice ? [item.indice] : []);
+    const indiceCible = indicesItem[0] || 'Tous les marchés';
+    const dejaSurBonMarche = window.CFG && (
+      window.CFG.indice === 'Tous les marchés' || indicesItem.includes(window.CFG.indice)
+    );
+    if (dejaSurBonMarche && window.Quant && window.Quant.focaliserTicker) {
       window.Quant.focaliserTicker(item.ticker);
       return;
     }
