@@ -1,11 +1,13 @@
 import os
 import re
 import json
+import math
 import time
 import asyncio
 from pathlib import Path
 
 import pandas as pd
+import yfinance as yf
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -405,3 +407,111 @@ async def api_post_watchlists(request: Request):
         modifier_watchlist_utilisateur, user["id"], action=action, list_name=list_name, ticker=ticker
     )
     return JSONResponse(content=res)
+
+
+# ---------------------------------------------------------------------------
+# Contexte de marché en direct (30 indicateurs, sans cache SQLite)
+# ---------------------------------------------------------------------------
+MACRO_INDICATEURS = [
+    # Groupe macro (Taux, Volatilité & Devises)
+    {"ticker": "^VIX", "nom": "Volatilité VIX", "groupe": "macro", "dec": 1, "unite": ""},
+    {"ticker": "^TNX", "nom": "Taux US 10 ans", "groupe": "macro", "dec": 2, "unite": " %"},
+    {"ticker": "^TYX", "nom": "Taux US 30 ans", "groupe": "macro", "dec": 2, "unite": " %"},
+    {"ticker": "DX-Y.NYB", "nom": "Dollar (DXY)", "groupe": "macro", "dec": 1, "unite": ""},
+    {"ticker": "EURUSD=X", "nom": "EUR / USD", "groupe": "macro", "dec": 3, "unite": " $"},
+    {"ticker": "USDJPY=X", "nom": "USD / JPY", "groupe": "macro", "dec": 1, "unite": " ¥"},
+    # Groupe energie (Énergie & Transition)
+    {"ticker": "CL=F", "nom": "Pétrole WTI", "groupe": "energie", "dec": 1, "unite": " $"},
+    {"ticker": "BZ=F", "nom": "Pétrole Brent", "groupe": "energie", "dec": 1, "unite": " $"},
+    {"ticker": "NG=F", "nom": "Gaz naturel", "groupe": "energie", "dec": 2, "unite": " $"},
+    {"ticker": "RB=F", "nom": "Essence RBOB", "groupe": "energie", "dec": 2, "unite": " $"},
+    {"ticker": "URA", "nom": "Uranium (ETF)", "groupe": "energie", "dec": 1, "unite": " $"},
+    {"ticker": "TAN", "nom": "Énergie solaire", "groupe": "energie", "dec": 1, "unite": " $"},
+    # Groupe materiaux (Métaux & Matériaux industriels)
+    {"ticker": "GC=F", "nom": "Or", "groupe": "materiaux", "dec": 0, "unite": " $"},
+    {"ticker": "SI=F", "nom": "Argent", "groupe": "materiaux", "dec": 2, "unite": " $"},
+    {"ticker": "HG=F", "nom": "Cuivre", "groupe": "materiaux", "dec": 2, "unite": " $"},
+    {"ticker": "SLX", "nom": "Acier (ETF)", "groupe": "materiaux", "dec": 1, "unite": " $"},
+    {"ticker": "ALI=F", "nom": "Aluminium", "groupe": "materiaux", "dec": 0, "unite": " $"},
+    {"ticker": "PL=F", "nom": "Platine", "groupe": "materiaux", "dec": 0, "unite": " $"},
+    {"ticker": "PA=F", "nom": "Palladium", "groupe": "materiaux", "dec": 0, "unite": " $"},
+    {"ticker": "LIT", "nom": "Lithium & Batteries", "groupe": "materiaux", "dec": 1, "unite": " $"},
+    {"ticker": "REMX", "nom": "Terres rares", "groupe": "materiaux", "dec": 1, "unite": " $"},
+    {"ticker": "CUT", "nom": "Bois & Papier", "groupe": "materiaux", "dec": 1, "unite": " $"},
+    # Groupe secteurs (Agriculture, Fret & Baromètres sectoriels)
+    {"ticker": "ZW=F", "nom": "Blé", "groupe": "secteurs", "dec": 0, "unite": " ¢"},
+    {"ticker": "ZC=F", "nom": "Maïs", "groupe": "secteurs", "dec": 0, "unite": " ¢"},
+    {"ticker": "KC=F", "nom": "Café", "groupe": "secteurs", "dec": 1, "unite": " ¢"},
+    {"ticker": "BDRY", "nom": "Fret maritime", "groupe": "secteurs", "dec": 2, "unite": " $"},
+    {"ticker": "^SOX", "nom": "Semi-conducteurs", "groupe": "secteurs", "dec": 0, "unite": ""},
+    {"ticker": "ITA", "nom": "Aéro & Défense", "groupe": "secteurs", "dec": 1, "unite": " $"},
+    {"ticker": "XLF", "nom": "Banques US", "groupe": "secteurs", "dec": 1, "unite": " $"},
+    {"ticker": "ITB", "nom": "Construction US", "groupe": "secteurs", "dec": 1, "unite": " $"},
+]
+
+
+def _recuperer_macro_direct() -> list:
+    """Télécharge en direct les 30 indicateurs macro/matières premières sans aucun cache SQLite."""
+    tickers = [m["ticker"] for m in MACRO_INDICATEURS]
+    df = yf.download(
+        tickers,
+        period="35d",
+        interval="1d",
+        group_by="ticker",
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+    )
+
+    items = []
+    for ind in MACRO_INDICATEURS:
+        tk = ind["ticker"]
+        prix = None
+        var_1m = None
+        try:
+            serie = None
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    if tk in df.columns.get_level_values(0):
+                        sous = df[tk]
+                        if "Close" in sous.columns:
+                            serie = sous["Close"].dropna()
+                elif "Close" in df.columns and len(tickers) == 1:
+                    serie = df["Close"].dropna()
+
+            if serie is not None and len(serie) >= 1:
+                dernier = float(serie.iloc[-1])
+                prec = float(serie.iloc[max(0, len(serie) - 22)])
+                if math.isfinite(dernier):
+                    prix = dernier
+                if math.isfinite(dernier) and math.isfinite(prec) and prec != 0:
+                    v = (dernier - prec) / prec * 100.0
+                    if math.isfinite(v):
+                        var_1m = v
+        except Exception:
+            prix = None
+            var_1m = None
+
+        items.append({
+            "ticker": tk,
+            "nom": ind["nom"],
+            "groupe": ind["groupe"],
+            "dec": ind["dec"],
+            "unite": ind["unite"],
+            "prix": prix,
+            "var_1m": var_1m,
+        })
+    return items
+
+
+@router.get("/api/macro")
+async def api_macro_direct(request: Request):
+    """Retourne les 30 indicateurs macroéconomiques, matières premières et sectoriels en direct."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Connexion requise")
+    try:
+        items = await asyncio.to_thread(_recuperer_macro_direct)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Erreur récupération macro : {e}")
+    return JSONResponse(content={"items": items}, headers=SANS_CACHE)

@@ -90,7 +90,7 @@ select, input[type=number] { font: inherit; font-size: .9rem; padding: 6px 8px; 
 @media (max-width: 720px) { .marche .ligne { grid-template-columns: 1fr auto; } .marche .nb, .marche .cons { grid-column: 1 / -1; } }
 
 /* ---------- tableau de bord ---------- */
-.app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.app { display: grid; grid-template-columns: 220px minmax(0, 1fr) 265px; min-height: 100vh; }
 .rail { background: var(--surface); border-right: 1px solid var(--trait); padding: 18px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .rail .marque { padding: 0 18px 14px; font-weight: 600; border-bottom: 1px solid var(--trait); margin-bottom: 10px; display: block; text-decoration: none; color: var(--encre); }
 .rail h3 { font-size: .78rem; font-weight: 500; color: var(--muted); padding: 12px 18px 4px; }
@@ -337,5 +337,177 @@ html.light-mode.daltonien { --vert: #0B6FBF; --vert-pale: #DCEBF8; --rouge: #B85
 @media (max-width: 720px) {
   .zone-graph iframe {
     height: 620px;
+  }
+}
+
+/* ---------- Colonne latérale droite : Contexte de marché ---------- */
+.macro-rail {
+  background: var(--surface);
+  border-left: 1px solid var(--trait);
+  padding: 16px 14px 20px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.macro-rail-tete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--trait);
+}
+.macro-rail-tete h2 {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--encre);
+  margin: 0;
+}
+.macro-maj-btn {
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 4px 8px;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--trait);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.macro-maj-btn:hover {
+  color: var(--encre);
+  border-color: var(--marine);
+}
+.macro-maj-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.macro-filtre-wrap input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 5px 8px;
+  border: 1px solid var(--trait);
+  border-radius: 4px;
+  background: var(--surface-alt, var(--papier));
+  color: var(--encre);
+}
+.macro-filtre-wrap input::placeholder {
+  color: var(--muted);
+}
+.macro-corps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.macro-groupe h3 {
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin: 0 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--trait);
+}
+.macro-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.macro-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 4px;
+  border-bottom: 1px dotted var(--trait);
+  font-size: 0.82rem;
+}
+.macro-item:last-child {
+  border-bottom: 0;
+}
+.macro-item:hover {
+  background: var(--hover-bg);
+}
+.macro-item-nom {
+  color: var(--encre);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.macro-item-val {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.macro-prix {
+  font-weight: 600;
+  color: var(--encre);
+}
+.macro-var {
+  font-size: 0.75rem;
+  min-width: 44px;
+  text-align: right;
+  color: var(--muted);
+}
+.macro-var.pos { color: var(--vert); }
+.macro-var.neg { color: var(--rouge); }
+.macro-vide {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.macro-note {
+  margin: auto 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--trait);
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+@media (max-width: 1280px) {
+  .app {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .macro-rail {
+    grid-column: 2 / -1;
+    position: static;
+    height: auto;
+    border-left: 0;
+    border-top: 1px solid var(--trait);
+    padding: 18px 24px 28px;
+  }
+  .macro-corps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px 22px;
+  }
+}
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .rail {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--trait);
+  }
+  .macro-rail {
+    grid-column: 1 / -1;
+    padding: 16px 18px 24px;
   }
 }

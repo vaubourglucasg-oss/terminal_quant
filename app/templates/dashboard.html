@@ -142,6 +142,35 @@
 
         <div class="tableau"><table id="tbl" class="display"></table></div>
     </main>
+
+    <aside class="macro-rail" aria-label="Contexte de marché et matières premières">
+        <div class="macro-rail-tete">
+            <h2>Contexte de marché</h2>
+            <button type="button" id="btn-maj-macro" class="macro-maj-btn" title="Actualiser les cours en direct" aria-label="Actualiser les indicateurs de marché">↻</button>
+        </div>
+        <div class="macro-filtre-wrap">
+            <input type="search" id="macro-filter" placeholder="Filtrer (ex. acier, pétrole…)" aria-label="Filtrer les indicateurs de marché">
+        </div>
+        <div class="macro-corps">
+            <section class="macro-groupe" data-groupe="macro">
+                <h3>Taux, volatilité &amp; devises</h3>
+                <ul id="macro-list-macro" class="macro-list"></ul>
+            </section>
+            <section class="macro-groupe" data-groupe="energie">
+                <h3>Énergie &amp; transition</h3>
+                <ul id="macro-list-energie" class="macro-list"></ul>
+            </section>
+            <section class="macro-groupe" data-groupe="materiaux">
+                <h3>Métaux &amp; matériaux</h3>
+                <ul id="macro-list-materiaux" class="macro-list"></ul>
+            </section>
+            <section class="macro-groupe" data-groupe="secteurs">
+                <h3>Agriculture, fret &amp; secteurs</h3>
+                <ul id="macro-list-secteurs" class="macro-list"></ul>
+            </section>
+        </div>
+        <p class="macro-note">Cours indicatifs en direct (hors cache). N'entrent pas dans le score des actions.</p>
+    </aside>
 </div>
 
 <script>window.CFG = {{ cfg | tojson }};</script>

@@ -787,5 +787,108 @@ $(function () {
     $('#etat').text('Connexion interrompue : rechargez la page.');
   };
 
-  Object.assign(window.Quant, { src, majResume, focaliserTicker });
+  // ---------- Colonne latérale droite : Contexte de marché en direct ----------
+  const macroListes = {
+    macro: document.getElementById('macro-list-macro'),
+    energie: document.getElementById('macro-list-energie'),
+    materiaux: document.getElementById('macro-list-materiaux'),
+    secteurs: document.getElementById('macro-list-secteurs'),
+  };
+  const btnMajMacro = document.getElementById('btn-maj-macro');
+  const inputFiltreMacro = document.getElementById('macro-filter');
+
+  function normaliserTexteMacro(txt) {
+    return String(txt || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  }
+
+  function formaterNombreFr(val, dec) {
+    if (val === null || val === undefined || !Number.isFinite(Number(val))) return '—';
+    return Number(val).toLocaleString('fr-FR', {
+      minimumFractionDigits: dec,
+      maximumFractionDigits: dec,
+    });
+  }
+
+  function appliquerFiltreMacro() {
+    if (!inputFiltreMacro) return;
+    const terme = normaliserTexteMacro(inputFiltreMacro.value.trim());
+    document.querySelectorAll('.macro-groupe').forEach(section => {
+      let visibles = 0;
+      section.querySelectorAll('.macro-item').forEach(li => {
+        const cible = li.dataset.recherche || '';
+        const ok = !terme || cible.includes(terme);
+        li.style.display = ok ? '' : 'none';
+        if (ok) visibles += 1;
+      });
+      section.style.display = visibles > 0 || !terme ? '' : 'none';
+    });
+  }
+
+  async function chargerContexteMacro() {
+    if (!macroListes.macro) return;
+    if (btnMajMacro) btnMajMacro.disabled = true;
+    try {
+      const resp = await fetch('/api/macro', { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const items = Array.isArray(data && data.items) ? data.items : [];
+
+      Object.values(macroListes).forEach(ul => {
+        if (ul) ul.innerHTML = '';
+      });
+
+      items.forEach(item => {
+        const ul = macroListes[item.groupe];
+        if (!ul) return;
+
+        const dec = Number.isInteger(item.dec) ? item.dec : 1;
+        const unite = item.unite || '';
+        const prixTxt = item.prix !== null && item.prix !== undefined && Number.isFinite(Number(item.prix))
+          ? `${formaterNombreFr(item.prix, dec)}${unite}`
+          : '—';
+
+        let varTxt = '—';
+        let varCls = '';
+        if (item.var_1m !== null && item.var_1m !== undefined && Number.isFinite(Number(item.var_1m))) {
+          const v = Number(item.var_1m);
+          const signe = v > 0 ? '+' : '';
+          varTxt = `${signe}${formaterNombreFr(v, 1)} %`;
+          if (v > 0) varCls = 'pos';
+          else if (v < 0) varCls = 'neg';
+        }
+
+        const li = document.createElement('li');
+        li.className = 'macro-item';
+        li.dataset.recherche = normaliserTexteMacro(`${item.nom || ''} ${item.ticker || ''}`);
+        li.title = `${item.nom || ''} (${item.ticker || ''}) — Variation sur 1 mois`;
+        li.innerHTML = `<span class="macro-item-nom">${esc(item.nom || item.ticker)}</span>`
+          + `<span class="macro-item-val"><span class="macro-prix">${esc(prixTxt)}</span>`
+          + `<span class="macro-var ${varCls}">${esc(varTxt)}</span></span>`;
+        ul.appendChild(li);
+      });
+
+      appliquerFiltreMacro();
+    } catch (err) {
+      Object.values(macroListes).forEach(ul => {
+        if (ul && !ul.children.length) {
+          ul.innerHTML = '<li class="macro-vide">Cours indisponibles</li>';
+        }
+      });
+    } finally {
+      if (btnMajMacro) btnMajMacro.disabled = false;
+    }
+  }
+
+  if (btnMajMacro) {
+    btnMajMacro.addEventListener('click', chargerContexteMacro);
+  }
+  if (inputFiltreMacro) {
+    inputFiltreMacro.addEventListener('input', appliquerFiltreMacro);
+  }
+  chargerContexteMacro();
+
+  Object.assign(window.Quant, { src, majResume, focaliserTicker, chargerContexteMacro });
 });
