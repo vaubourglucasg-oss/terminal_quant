@@ -27,6 +27,20 @@
         <p class="note">Ces repères aident à lire le marché, ils n'entrent pas dans le score des actions.{% if tops %} Contextes les plus porteurs aujourd'hui : {{ tops | join(', ') }}.{% endif %}</p>
 
         <h2>Marché à analyser</h2>
+
+        <section class="region">
+            <h3>Vue globale</h3>
+            <label class="marche">
+                <input type="radio" name="indice" value="Tous les marchés" {% if defaut == 'Tous les marchés' %}checked{% endif %}>
+                <span class="ligne">
+                    <span class="nom">Tous les marchés</span>
+                    <span class="nb">~2 035 titres</span>
+                    <span class="badge badge-opp">Vue mondiale</span>
+                    <span class="cons">Agrège l'ensemble des actions en cache sur les 20 indices (filtrable par continent, devise et capitalisation).</span>
+                </span>
+            </label>
+        </section>
+
         {% for region in regions %}
         <section class="region">
             <h3>{{ region.nom }}</h3>
@@ -50,6 +64,9 @@
             <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème">
                 <i class="fa-solid fa-moon" id="themeIcon"></i> <span id="themeText">Sombre</span>
             </button>
+            <button type="button" class="theme-btn" data-open-search title="Recherche rapide globale (Ctrl+K)">
+                <i class="fa-solid fa-magnifying-glass"></i> Rechercher <kbd class="kbd-hint">Ctrl K</kbd>
+            </button>
             {% if user %}
             <span style="font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 8px;">
                 <i class="fa-solid fa-user"></i> {{ user.email }}
@@ -72,5 +89,6 @@
 {% if user %}
 <form id="form-logout" method="POST" action="/logout" style="display:none;"></form>
 {% endif %}
+<script src="/static/global_search.js"></script>
 </body>
 </html>

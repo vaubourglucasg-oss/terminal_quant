@@ -430,9 +430,10 @@ def valider_staging_vers_cache(indices_cibles: list[str] | None = None) -> int:
         _exporter_vers_gcs(forcer=True)
     return nb_bascules
 
-def statut_indices_cache(tous_indices: list[str]) -> dict[str, dict]:
+
+def statut_indices_cache(tous_indices: list[str], forcer_sync: bool = True) -> dict[str, dict]:
     """Retourne pour chaque indice le nombre de titres en cache et l'horodatage de sa dernière mise à jour."""
-    _importer_depuis_gcs(forcer=True)
+    _importer_depuis_gcs(forcer=forcer_sync)
     stats = {idx: {"nb": 0, "maj": None} for idx in tous_indices}
     conn = _conn_cache()
     try:
@@ -798,6 +799,7 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         row = {
             "ticker": ticker_symbol, "nom": info.get("shortName") or ticker_symbol, "secteur": secteur,
             "industrie": info.get("industry") or "", "est_fin": est_fin, "devise": devise, "prix": prix,
+            "cap": cap,
             "resume": (info.get("longBusinessSummary") or "Aucune description.")[:700],
             "url": f"https://finance.yahoo.com/quote/{ticker_symbol}/profile",
             "maj": datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC"),
@@ -829,3 +831,189 @@ def analyser_action_brute(ticker_symbol, secteurs_cibles, rf_us, donnees_macro=N
         print(f"Erreur sur {ticker_symbol} : {e}")
         _enregistrer_erreur(f"{ticker_symbol}: {type(e).__name__} {e}")
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Vue globale « Tous les marchés » & Listes de suivi (Watchlists)
+# --------------------------------------------------------------------------- #
+FX_FALLBACK_USD = {
+    "USD": 1.0, "EUR": 1.08, "GBP": 1.27, "CHF": 1.13, "JPY": 0.0067,
+    "CAD": 0.72, "AUD": 0.65, "SEK": 0.095, "HKD": 0.128, "CNY": 0.138,
+    "INR": 0.0118, "BRL": 0.175, "ILS": 0.27, "ZAR": 0.055,
+}
+
+WATCHLISTS_DEFAUT = ["À renforcer", "Long terme", "Surveillance"]
+
+
+def _table_continent_par_indice() -> dict[str, str]:
+    from app.api.screener import REGIONS
+    mapping = {}
+    for cont, indices in REGIONS.items():
+        for idx in indices:
+            mapping[idx] = cont
+    return mapping
+
+
+def charger_tout_le_cache() -> list[dict]:
+    """Charge toutes les actions uniques présentes dans cache_actions avec continent et capitalisation normalisée."""
+    _importer_depuis_gcs(forcer=False)
+    continent_map = _table_continent_par_indice()
+    conn = _conn_cache()
+    par_ticker: dict[str, dict] = {}
+    try:
+        rows = conn.execute("""
+            SELECT ticker, indice, data
+            FROM cache_actions
+            WHERE version = ?
+            ORDER BY date ASC, last_updated ASC
+        """, (VERSION_SCHEMA,)).fetchall()
+        for r in rows:
+            tk = r["ticker"]
+            if not tk or "|" in tk:
+                continue
+            try:
+                item = json.loads(r["data"])
+            except Exception:
+                continue
+            idx = r["indice"] or item.get("indice") or ""
+            cont = continent_map.get(idx, "Autre")
+            if tk in par_ticker:
+                anciens_idx = par_ticker[tk].get("indices_liste") or []
+                if idx and idx not in anciens_idx:
+                    anciens_idx.append(idx)
+                item["indices_liste"] = anciens_idx
+                item["indice"] = ", ".join(anciens_idx) if anciens_idx else idx
+            else:
+                item["indices_liste"] = [idx] if idx else []
+                item["indice"] = idx
+            item["continent"] = cont
+            par_ticker[tk] = item
+    finally:
+        conn.close()
+
+    actions = list(par_ticker.values())
+    devises = {a.get("devise") for a in actions if a.get("devise") and a.get("devise") != "USD"}
+    taux_usd = {"USD": 1.0}
+    if devises:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futs = {ex.submit(taux_change, dev, "USD"): dev for dev in devises}
+            for f in as_completed(futs):
+                dev = futs[f]
+                try:
+                    val = f.result()
+                except Exception:
+                    val = None
+                taux_usd[dev] = val if val else FX_FALLBACK_USD.get(dev, 1.0)
+
+    for a in actions:
+        dev = a.get("devise") or "USD"
+        cap_brut = _f(a.get("cap"))
+        if cap_brut and cap_brut > 0:
+            a["cap_usd_md"] = round((cap_brut * taux_usd.get(dev, 1.0)) / 1e9, 2)
+        else:
+            a["cap_usd_md"] = None
+
+    return actions
+
+
+def _init_table_watchlists(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_watchlists (
+            user_id TEXT NOT NULL,
+            list_name TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            created_at TEXT,
+            PRIMARY KEY (user_id, list_name, ticker)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_watchlist_names (
+            user_id TEXT NOT NULL,
+            list_name TEXT NOT NULL,
+            ordre INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, list_name)
+        )
+    """)
+
+
+def lire_watchlists_utilisateur(user_id: str) -> dict:
+    """Retourne les listes nommées et l'association {ticker: [listes]} de l'utilisateur."""
+    _importer_depuis_gcs(forcer=False)
+    uid = str(user_id or "default")
+    conn = _conn_cache()
+    try:
+        _init_table_watchlists(conn)
+        for i, nom in enumerate(WATCHLISTS_DEFAUT):
+            conn.execute(
+                "INSERT OR IGNORE INTO user_watchlist_names (user_id, list_name, ordre) VALUES (?, ?, ?)",
+                (uid, nom, i)
+            )
+        conn.commit()
+
+        noms_rows = conn.execute(
+            "SELECT list_name FROM user_watchlist_names WHERE user_id = ? ORDER BY ordre ASC, list_name ASC",
+            (uid,)
+        ).fetchall()
+        listes = [r["list_name"] for r in noms_rows]
+
+        items_rows = conn.execute(
+            "SELECT ticker, list_name FROM user_watchlists WHERE user_id = ? ORDER BY created_at ASC",
+            (uid,)
+        ).fetchall()
+        items: dict[str, list[str]] = {}
+        for r in items_rows:
+            items.setdefault(r["ticker"], []).append(r["list_name"])
+
+        return {"lists": listes, "items": items}
+    finally:
+        conn.close()
+
+
+def modifier_watchlist_utilisateur(user_id: str, action: str, list_name: str, ticker: str = "") -> dict:
+    """Ajoute/retire un ticker d'une liste ou crée/supprime une liste nommée."""
+    uid = str(user_id or "default")
+    nom = (list_name or "").strip()[:40]
+    tk = (ticker or "").strip().upper()
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    conn = _conn_cache()
+    try:
+        _init_table_watchlists(conn)
+        if action == "create_list" and nom:
+            conn.execute(
+                "INSERT OR IGNORE INTO user_watchlist_names (user_id, list_name, ordre) VALUES (?, ?, 99)",
+                (uid, nom)
+            )
+            if tk:
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_watchlists (user_id, list_name, ticker, created_at) VALUES (?, ?, ?, ?)",
+                    (uid, nom, tk, now_iso)
+                )
+        elif action == "delete_list" and nom and nom not in WATCHLISTS_DEFAUT:
+            conn.execute("DELETE FROM user_watchlist_names WHERE user_id = ? AND list_name = ?", (uid, nom))
+            conn.execute("DELETE FROM user_watchlists WHERE user_id = ? AND list_name = ?", (uid, nom))
+        elif action == "toggle" and nom and tk:
+            conn.execute(
+                "INSERT OR IGNORE INTO user_watchlist_names (user_id, list_name, ordre) VALUES (?, ?, 99)",
+                (uid, nom)
+            )
+            existe = conn.execute(
+                "SELECT 1 FROM user_watchlists WHERE user_id = ? AND list_name = ? AND ticker = ?",
+                (uid, nom, tk)
+            ).fetchone()
+            if existe:
+                conn.execute(
+                    "DELETE FROM user_watchlists WHERE user_id = ? AND list_name = ? AND ticker = ?",
+                    (uid, nom, tk)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO user_watchlists (user_id, list_name, ticker, created_at) VALUES (?, ?, ?, ?)",
+                    (uid, nom, tk, now_iso)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _exporter_vers_gcs(forcer=False)
+    return lire_watchlists_utilisateur(uid)

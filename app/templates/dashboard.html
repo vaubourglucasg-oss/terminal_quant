@@ -18,6 +18,11 @@
         <div style="font-size: 0.85em; color: var(--muted);" id="progressText">
             <i class="fa-solid fa-circle-notch fa-spin"></i> Traitement...
         </div>
+
+        <button type="button" class="theme-btn" data-open-search title="Recherche rapide globale (Ctrl+K)">
+            <i class="fa-solid fa-magnifying-glass"></i> Rechercher <kbd class="kbd-hint">Ctrl K</kbd>
+        </button>
+
         <a id="btn-mindmap" class="theme-btn" href="/mindmap" target="_blank" rel="noopener"><i class="fa-solid fa-diagram-project"></i> Carte M&amp;A</a>
          
         <button id="themeToggleBtn" class="theme-btn" type="button" aria-label="Changer de thème">
@@ -40,6 +45,11 @@
 <div class="app">
     <nav class="rail" aria-label="Marchés">
         <a class="marque" href="/">Terminal quantitatif</a>
+
+        <h3>Vue globale</h3>
+        <a class="m {% if indice == 'Tous les marchés' %}actif{% endif %}" href="/run?indice=Tous%20les%20march%C3%A9s{% if secteur %}&secteur={{ secteur | urlencode }}{% endif %}" title="Agréger l'ensemble des titres en cache sur tous les continents">
+            <span><i class="fa-solid fa-globe" style="margin-right:6px; opacity:0.8;"></i>Tous les marchés</span><span class="pt badge-opp"></span>
+        </a>
         
         {% for region in regions %}
         <h3>{{ region.nom }}</h3>
@@ -50,10 +60,9 @@
         {% endfor %}
         {% endfor %}
 
-        <!-- Unique bloc Paramètres positionné proprement tout en bas de la barre -->
         <div class="rail-bas">
             <h3>Paramètres</h3>
-            <div id="parametres"><!-- ton code ici --></div>
+            <div id="parametres"></div>
         </div>
     </nav>
 
@@ -79,6 +88,21 @@
         </div>
 
         <div class="filtres">
+            <label>Continent
+                <select id="f-continent">
+                    <option value="">Tous</option>
+                    <option value="Europe">Europe</option>
+                    <option value="Amérique du Nord">Amérique du Nord</option>
+                    <option value="Asie et marchés émergents">Asie et marchés émergents</option>
+                </select>
+            </label>
+            <label>Devise
+                <select id="f-devise">
+                    <option value="">Toutes</option>
+                </select>
+            </label>
+            <label>Cap. min. (Md$) <input type="number" id="f-cap-min" step="1" placeholder="ex. 10"></label>
+            <label>Cap. max. (Md$) <input type="number" id="f-cap-max" step="1" placeholder="ex. 200"></label>
             <label>Secteur
                 <select id="f-secteur">
                     <option value="">Tous</option>
@@ -105,8 +129,14 @@
             <label>Risque de faillite
                 <select id="f-altman"><option value="">Tous</option><option value="sain">Hors zone de détresse</option></select>
             </label>
-            <label>Favoris
-                <select id="f-fav"><option value="">Tous</option><option value="oui">Favoris seulement</option></select>
+            <label>Listes de suivi
+                <select id="f-fav">
+                    <option value="">Toutes</option>
+                    <option value="__ANY__">Dans une liste (★)</option>
+                    <option value="À renforcer">À renforcer</option>
+                    <option value="Long terme">Long terme</option>
+                    <option value="Surveillance">Surveillance</option>
+                </select>
             </label>
         </div>
 
@@ -123,5 +153,6 @@
 <script src="/static/dashboard.js"></script>
 <script src="/static/compare.js"></script>
 <script src="/static/parametres.js"></script>
+<script src="/static/global_search.js"></script>
 </body>
 </html>

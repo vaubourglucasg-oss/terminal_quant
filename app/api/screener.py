@@ -1,15 +1,18 @@
 import os
 import re
 import json
+import time
 import asyncio
 from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from app.engine.fetcher import (analyser_tendances_macro, charger_lot_du_cache, charger_du_cache,
+                                charger_tout_le_cache, lire_watchlists_utilisateur,
+                                modifier_watchlist_utilisateur,
                                 lire_meta, ecrire_meta, json_safe, normaliser_hypotheses, vider_cache,
                                 cle_hypotheses)
 from app.engine.scoring import calculer_scores, normaliser_reglages
@@ -24,6 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 SANS_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+_CATALOG_CACHE = {"ts": 0.0, "items": []}
 
 
 def lire_reglages(brut):
@@ -68,6 +72,13 @@ TICKERS_PAR_INDICE = {
 
 
 def obtenir_tickers_pour_indice(indice: str):
+    if indice == "Tous les marchés":
+        tous = []
+        for reg_indices in REGIONS.values():
+            for idx in reg_indices:
+                tous.extend(obtenir_tickers_pour_indice(idx))
+        return list(dict.fromkeys(tous))
+
     if indice in ("SP 500", "S&P 500"):
         en_cache = lire_meta("tickers_sp500")
         try:
@@ -219,46 +230,58 @@ async def flux_donnees_temps_reel(request: Request, indice: str = "CAC 40", sect
 
     async def generer():
         yield evt("statut", {"msg": "Lecture du cache…"})
-        tickers = await asyncio.to_thread(obtenir_tickers_pour_indice, indice)
-        tickers = list(dict.fromkeys(tickers))
-        if not tickers:
-            yield evt("statut", {"msg": "Aucun titre référencé pour cet indice."})
-            yield "event: close\ndata: end\n\n"
-            return
-
         suffixe_hyp = cle_hypotheses(reg["hyp"])
-        cles_recherche = [tk + suffixe_hyp for tk in tickers] if suffixe_hyp else tickers
-        cache_map = await asyncio.to_thread(charger_lot_du_cache, cles_recherche)
-        if suffixe_hyp and len(cache_map) < len(tickers):
-            manquants = [tk for tk in tickers if (tk + suffixe_hyp) not in cache_map]
-            fallback_map = await asyncio.to_thread(charger_lot_du_cache, manquants)
-            for tk, val in fallback_map.items():
-                cache_map[tk + suffixe_hyp] = val
 
-        lignes = []
-        for idx, tk in enumerate(tickers):
-            cle = tk + suffixe_hyp if suffixe_hyp else tk
-            row = cache_map.get(cle)
-            if row and (not secteurs_cibles or row.get("secteur") in secteurs_cibles):
-                lignes.append(row)
+        if indice == "Tous les marchés":
+            toutes_actions = await asyncio.to_thread(charger_tout_le_cache)
+            total_ref = len(toutes_actions)
+            if total_ref == 0:
+                yield evt("statut", {"msg": "Aucune donnée en cache sur les marchés."})
+                yield "event: close\ndata: end\n\n"
+                return
+            lignes = [a for a in toutes_actions if not secteurs_cibles or a.get("secteur") in secteurs_cibles]
+        else:
+            tickers = await asyncio.to_thread(obtenir_tickers_pour_indice, indice)
+            tickers = list(dict.fromkeys(tickers))
+            total_ref = len(tickers)
+            if not tickers:
+                yield evt("statut", {"msg": "Aucun titre référencé pour cet indice."})
+                yield "event: close\ndata: end\n\n"
+                return
 
-        yield evt("init", {"total": len(tickers), "en_cache": len(lignes)})
+            cles_recherche = [tk + suffixe_hyp for tk in tickers] if suffixe_hyp else tickers
+            cache_map = await asyncio.to_thread(charger_lot_du_cache, cles_recherche)
+            if suffixe_hyp and len(cache_map) < len(tickers):
+                manquants = [tk for tk in tickers if (tk + suffixe_hyp) not in cache_map]
+                fallback_map = await asyncio.to_thread(charger_lot_du_cache, manquants)
+                for tk, val in fallback_map.items():
+                    cache_map[tk + suffixe_hyp] = val
+
+            lignes = []
+            for tk in tickers:
+                cle = tk + suffixe_hyp if suffixe_hyp else tk
+                row = cache_map.get(cle)
+                if row and (not secteurs_cibles or row.get("secteur") in secteurs_cibles):
+                    lignes.append(row)
+
+        yield evt("init", {"total": total_ref, "en_cache": len(lignes)})
 
         for i, row in enumerate(lignes):
             yield f"data: {json.dumps(json_safe(row), allow_nan=False)}\n\n"
             if (i + 1) % 50 == 0 or (i + 1) == len(lignes):
-                yield evt("progress", {"done": len(tickers), "recus": i + 1, "erreurs": 0})
+                yield evt("progress", {"done": total_ref, "recus": i + 1, "erreurs": 0})
 
         if not lignes:
-            yield evt("progress", {"done": len(tickers), "recus": 0, "erreurs": 0})
+            yield evt("progress", {"done": total_ref, "recus": 0, "erreurs": 0})
 
         if lignes:
             utiles = [l for l in lignes if not (reg["exclure_fin"] and l.get("est_fin"))]
             scores = await asyncio.to_thread(calculer_scores, utiles, reg["score"])
             yield evt("scores", scores)
-            await asyncio.to_thread(
-                journaliser_scan, indice, lignes, len(tickers), secteurs_cibles, suffixe_hyp == ""
-            )
+            if indice != "Tous les marchés":
+                await asyncio.to_thread(
+                    journaliser_scan, indice, lignes, total_ref, secteurs_cibles, suffixe_hyp == ""
+                )
 
         yield "event: close\ndata: end\n\n"
 
@@ -282,6 +305,8 @@ async def recalculer_scores(request: Request):
 
 @router.post("/api/cache/vider")
 async def vider_le_cache(user: dict = Depends(require_admin)):
+    _CATALOG_CACHE["ts"] = 0.0
+    _CATALOG_CACHE["items"] = []
     return {"supprimes": await asyncio.to_thread(vider_cache)}
 
 
@@ -313,3 +338,70 @@ async def graphique(ticker: str, periode: str = "1y"):
     if chemin and os.path.exists(chemin):
         return FileResponse(chemin, headers=SANS_CACHE)
     return HTMLResponse("<p style='font-family:sans-serif;padding:1rem'>Graphique indisponible pour ce titre.</p>", status_code=404)
+
+
+@router.get("/api/search/catalog")
+async def api_search_catalog(request: Request):
+    """Catalogue léger de toutes les actions en cache pour la recherche instantanée Ctrl+K."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Connexion requise")
+
+    now = time.time()
+    if _CATALOG_CACHE["items"] and (now - _CATALOG_CACHE["ts"]) < 60.0:
+        return JSONResponse(content={"items": _CATALOG_CACHE["items"]})
+
+    actions = await asyncio.to_thread(charger_tout_le_cache)
+    catalogue = []
+    for a in actions:
+        indices_liste = a.get("indices_liste") or ([a["indice"]] if a.get("indice") else [])
+        indice_principal = indices_liste[0] if indices_liste else ""
+        catalogue.append({
+            "ticker": a.get("ticker", ""),
+            "nom": a.get("nom", ""),
+            "secteur": a.get("secteur", ""),
+            "indice": indice_principal,
+            "indices": indices_liste,
+            "continent": a.get("continent", ""),
+            "devise": a.get("devise", ""),
+            "prix": a.get("prix"),
+            "cap_usd_md": a.get("cap_usd_md"),
+            "signal": a.get("signal", ""),
+        })
+    catalogue.sort(key=lambda x: x["ticker"])
+    _CATALOG_CACHE["ts"] = now
+    _CATALOG_CACHE["items"] = catalogue
+    return JSONResponse(content={"items": catalogue})
+
+
+@router.get("/api/user/watchlists")
+async def api_get_watchlists(request: Request):
+    """Retourne les listes de suivi nommées et les tickers associés à l'utilisateur connecté."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Connexion requise")
+    res = await asyncio.to_thread(lire_watchlists_utilisateur, user["id"])
+    return JSONResponse(content=res)
+
+
+@router.post("/api/user/watchlists")
+async def api_post_watchlists(request: Request):
+    """Ajoute, retire un ticker d'une liste ou crée/supprime une liste de suivi."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Connexion requise")
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="JSON invalide")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Corps JSON invalide")
+    action = str(body.get("action") or "toggle")
+    list_name = str(body.get("list_name") or "")
+    ticker = str(body.get("ticker") or "").strip().upper()
+    if ticker and not RE_TICKER.match(ticker):
+        raise HTTPException(status_code=400, detail="Ticker invalide")
+    res = await asyncio.to_thread(
+        modifier_watchlist_utilisateur, user["id"], action=action, list_name=list_name, ticker=ticker
+    )
+    return JSONResponse(content=res)
